@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, thirdwebAuth } from "../../../../lib/auth";
+import { authDomain, issueAuthToken, verifySiweLogin } from "../../../../lib/auth/siwe";
 import { prisma } from "@bloody-roar/database";
 import crypto from "crypto";
 import { headers } from "next/headers";
@@ -28,8 +29,9 @@ export async function POST(req: Request) {
     const auth = thirdwebAuth();
     const payload = await req.json();
 
-    // 1. Verify the signed login payload → returns wallet address as string
-    const walletAddress = await auth.verify(payload);
+    // Thirdweb compares recovered signer with `===` (checksum vs lowercase),
+    // which rejects valid MetaMask signatures. Verify case-insensitively.
+    const walletAddress = verifySiweLogin(payload, authDomain());
     const checksumAddress = walletAddress.toLowerCase();
 
     const existingUser = await prisma.user.findUnique({ where: { walletAddress: checksumAddress } });
@@ -64,7 +66,7 @@ export async function POST(req: Request) {
     });
 
     // Generate JWT
-    const token = await auth.generate(payload);
+    const token = await issueAuthToken(walletAddress);
 
     // Parse token to extract exp
     const parsedToken = auth.parseToken(token);
@@ -106,7 +108,8 @@ export async function POST(req: Request) {
     });
     return response;
   } catch (error) {
-    log.warn({ error }, "Wallet login verification failed");
+    console.error("Wallet login verification failed with exact error:", error);
+    log.warn({ error: error instanceof Error ? error.message : String(error) }, "Wallet login verification failed");
     return NextResponse.json(
       { error: "Invalid login payload" },
       { status: 401 },

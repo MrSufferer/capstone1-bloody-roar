@@ -111,6 +111,13 @@ describe("useAuthStore", () => {
 
     expect(result).toBe(true);
     expect(mockSigner).toHaveBeenCalled();
+    const signedMessage = mockSigner.mock.calls[0]?.[0] as string;
+    expect(signedMessage).toContain("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
+    const loginCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("/api/auth/login"),
+    );
+    const loginBody = JSON.parse((loginCall?.[1] as { body: string }).body);
+    expect(loginBody.payload.address).toBe("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
     const state = useAuthStore.getState();
     expect(state.status).toBe("authenticated");
     expect(state.user?.walletAddress).toBe(mockUser.walletAddress);
