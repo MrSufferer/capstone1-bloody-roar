@@ -531,7 +531,7 @@ Khuyến nghị: mỗi phase một phiên mới (`/clear` giữa các phase) đ�
 
 ### Phase 1: Auto-claim
 - [x] 1.1 Export wallet client từ shared
-- [ ] 1.2 Schema auto-claim
+- [x] 1.2 Schema auto-claim
 - [ ] 1.3 Config relayer
 - [ ] 1.4 Job auto-claim
 - [ ] 1.5 Cảnh báo hết gas
