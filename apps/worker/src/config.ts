@@ -10,6 +10,8 @@ export type WorkerConfig = {
   reorgWindow: number; // how far back a reorg rewinds the cursor
   lockUrl: string; // DIRECT_URL: advisory locks need a session, not a pooled connection
   alertWebhookUrl: string | undefined;
+  relayerPrivateKey: string | undefined; // pays gas for auto-claim; unset = auto-claim off
+  relayerMinGasWei: bigint; // alert when the relayer's ETH drops below this
 };
 
 type Env = Record<string, string | undefined>;
@@ -41,6 +43,10 @@ export function loadConfig(env: Env = process.env): WorkerConfig {
   if (deployBlockRaw && !/^\d+$/.test(deployBlockRaw)) errors.push("ESCROW_DEPLOY_BLOCK must be a block number");
   const databaseUrl = env.DIRECT_URL?.trim() || env.DATABASE_URL?.trim();
   if (!databaseUrl) errors.push("DIRECT_URL or DATABASE_URL is required");
+  const relayerPrivateKey = env.RELAYER_PRIVATE_KEY?.trim() || undefined;
+  if (relayerPrivateKey && !/^0x[0-9a-fA-F]{64}$/.test(relayerPrivateKey)) errors.push("RELAYER_PRIVATE_KEY must be a 0x-prefixed 32-byte hex key");
+  const relayerMinGasRaw = env.RELAYER_MIN_GAS_WEI?.trim() || "1000000000000000";
+  if (!/^\d+$/.test(relayerMinGasRaw)) errors.push("RELAYER_MIN_GAS_WEI must be a non-negative integer");
 
   if (errors.length > 0) throw new Error(`Invalid worker config: ${errors.join("; ")}`);
   return {
@@ -54,5 +60,7 @@ export function loadConfig(env: Env = process.env): WorkerConfig {
     reorgWindow: integer("INDEXER_REORG_WINDOW", 64, 1),
     lockUrl: databaseUrl ?? "",
     alertWebhookUrl: env.ALERT_WEBHOOK_URL?.trim() || undefined,
+    relayerPrivateKey,
+    relayerMinGasWei: BigInt(relayerMinGasRaw),
   };
 }

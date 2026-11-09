@@ -37,3 +37,12 @@ test("reports every missing or invalid value at once", () => {
   expect(() => loadConfig({ ...valid, ESCROW_DEPLOY_BLOCK: undefined })).toThrow(/ESCROW_DEPLOY_BLOCK is required/);
   expect(() => loadConfig({ ...valid, DATABASE_URL: undefined })).toThrow(/DIRECT_URL or DATABASE_URL is required/);
 });
+
+test("relayer key is optional and must be a 32-byte hex key; gas threshold defaults to 0.001 ETH", () => {
+  const key = "0x" + "11".repeat(32);
+  expect(loadConfig(valid).relayerPrivateKey).toBeUndefined();
+  expect(loadConfig(valid).relayerMinGasWei).toBe(1000000000000000n);
+  expect(loadConfig({ ...valid, RELAYER_PRIVATE_KEY: key }).relayerPrivateKey).toBe(key);
+  expect(() => loadConfig({ ...valid, RELAYER_PRIVATE_KEY: "0x1234" })).toThrow(/RELAYER_PRIVATE_KEY must be a 0x-prefixed 32-byte hex key/);
+  expect(() => loadConfig({ ...valid, RELAYER_MIN_GAS_WEI: "0.001" })).toThrow(/RELAYER_MIN_GAS_WEI must be a non-negative integer/);
+});
