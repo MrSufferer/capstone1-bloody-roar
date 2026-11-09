@@ -861,6 +861,8 @@ model ClaimableBalance {
   address         String
   amountRaw       Decimal  @db.Decimal(78, 0)
   updatedAt       DateTime @updatedAt
+  autoClaimTxHash String?
+  autoClaimAt     DateTime?
 
   @@id([chainId, contractAddress, address])
   @@map("claimable_balances")
