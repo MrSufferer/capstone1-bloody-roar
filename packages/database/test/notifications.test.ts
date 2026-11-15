@@ -1,7 +1,10 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { PrismaClient } from "@prisma/client";
 import { assertTestDatabase } from "../src/test-guard";
 import { createNotificationIdempotent } from "../src/notifications";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const db = new PrismaClient();
 const walletAddress = `test-notification-${crypto.randomUUID()}`;
@@ -31,4 +34,6 @@ test("concurrent duplicates do not abort the transaction", async () => {
   expect(results.filter((result) => result.notification)).toHaveLength(1);
   expect(results.map((result) => result.user.id)).toEqual([userId, userId]);
   expect(await db.notification.count({ where: { dedupeKey } })).toBe(1);
+});
+
 });

@@ -1,6 +1,9 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { PrismaClient } from "@prisma/client";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 // Needs a migrated DATABASE_URL (bun run db:migrate). Rows are removed after the run.
 const db = new PrismaClient();
@@ -37,4 +40,6 @@ test("one active reservation per issue; terminal rows are allowed", async () => 
 afterAll(async () => {
   await db.fundingReservation.deleteMany({ where: { issueId } });
   await db.$disconnect();
+});
+
 });
