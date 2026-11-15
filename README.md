@@ -159,7 +159,8 @@ confirmation. Setup and GraphQL examples are in [Escrow integration](docs/ESCROW
 | `RESOLVED` | Principal allocated to claimable balances; recipients call `claim(address)` |
 
 A missed delivery permits a full refund after the delivery deadline. Delivered
-work permits release after that deadline plus seven days. Either party can
+work permits release seven days after its latest submission. A resubmission
+starts a fresh seven-day review window. Either party can
 propose a settlement in basis points. A stalled arbiter permits a 50/50 split
 after 30 days. The platform fee is 2.5% of the developer's gross allocation,
 rounded down; a full client refund has no fee.

@@ -330,3 +330,65 @@ mutation RaiseTaskDispute {
   }
 }
 ```
+
+
+## Test runner và inbox — xác minh 2026-11-10
+
+Build image bằng lệnh trong `docs/RUNBOOK.md` trước khi chạy Docker tests.
+Đặt `DATABASE_URL`, `DIRECT_URL`, `TEST_DATABASE_URL` cùng trỏ tới database
+Postgres **riêng có tên chứa `test`**, đã migrate. Không dùng database đang dùng
+cho các lệnh test: integration/E2E/seed test có reset dữ liệu fixture.
+
+```bash
+bun run typecheck
+bun run lint
+bun run build
+DOCKER_TESTS=1 bun run --cwd apps/web test
+DOCKER_TESTS=1 GITHUB_TESTS=1 bun run --cwd apps/worker test
+bun run --cwd packages/database test
+bun run --cwd apps/web test:integration
+bun run contracts:test
+bun run --cwd apps/contracts test:fuzz
+bun run --cwd apps/contracts test:fork
+bun run test:e2e:backend
+```
+
+Mỗi suite DB dùng database test riêng nếu chạy song song. E2E harness dùng
+Hardhat 18545, web 4012, worker 4011 và `.next-e2e` để không ghi vào cache dev;
+Chrome headless chạy từ CLI qua Playwright, không cần điều khiển cửa sổ browser.
+
+Đã kiểm chứng:
+
+- `test-runner-flow.db.test.ts`: source ZIP → snapshot → sinh 3 executable cases
+  từ AI fixture → BASE_CHECK đỏ đúng case bug, regression cases xanh → không
+  approve trước xác minh → approve → draft patch → test PASSED → prepare được.
+  FAILED, đổi bundle, đổi SHA256 patch, hoặc chưa chạy đều chặn prepare.
+- `public-source.test.ts`: clone GitHub `unjs/pathe` tại tag `v2.0.3`, pin SHA,
+  tạo test metadata yêu cầu tên package mới; base fail bằng assertion thật,
+  patch đúng pass trong Docker. Không xem báo cáo rỗng là base failure hợp lệ.
+- `sandbox.test.ts`: Vitest và pytest thật, base đỏ/patch đúng xanh, patch sai
+  đỏ, path traversal bị chặn, skipped/missing test không được tính pass.
+- `conversations.db.test.ts`: 2 ứng viên có phòng riêng, outsider/admin không
+  đọc application room, AI masking, idempotency, attachment không qua phòng
+  khác, unread theo participant, khóa ghi sau lựa chọn, admin chỉ đọc work
+  room khi DISPUTED. Badge vẫn đúng khi đang chờ funding.
+- `source-download.test.ts`: chỉ task parties được tải; admin chỉ khi dispute;
+  chặn đường dẫn ngoài snapshot root và symlink, response không cache public.
+- `e33-auto-claim.test.ts`: fund → submit → release → auto-claim, event/indexer
+  và token balance khớp trong dưới một phút.
+
+Scenario UI `apps/web/ui-e2e/e34-inbox.test.ts` kiểm desktop/mobile: client đổi
+qua lại hai phòng, nút quay lại trên mobile, ứng viên B không nhìn thấy tin hay
+phòng của A. `e32-ui-flow.test.ts` giữ kiểm hồi quy luồng ví/issue/chat hiện có.
+Kết quả cuối của harness ghi vào `tests/e2e/.run/last-run.txt`.
+
+AI trong integration test là fixture xác định để kiểm prompt/context, thay ID,
+queue và approval gate. Chất lượng model thật phụ thuộc endpoint/model do chủ
+môi trường cấu hình; không thay model hay gửi source thật tới dịch vụ khác khi
+chạy test.
+
+Kết quả chốt: web 661/661; worker 88/88; database 4/4; integration 2/2;
+Hardhat 36/36; Foundry 13/13; Base Sepolia fork 1/1; backend E2E 43/43;
+UI 3/3. Typecheck, lint, production build và `git diff --check` đều pass.
+UI đã chạy lại bằng `E2E_UI_ONLY=1 bun run test:e2e:local` sau lượt backend
+đầy đủ; default harness vẫn chạy cả backend lẫn UI.

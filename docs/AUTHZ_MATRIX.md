@@ -108,3 +108,26 @@ Kiểm bằng `tests/e2e/e28-authz.test.ts`: khách và người ngoài theo mã
 1. **Người bị khóa.** `createIssueComment` còn kiểm `user.isBanned`, nhưng nhánh đó không bao giờ chạy vì `verifyJWT` đã loại người bị khóa. Giữ lại để không đổi phạm vi.
 2. **`cancelEscrow` cho admin (cần quyết định, owner A4).** Cổng trong `confirmEscrowAction` cho admin đi qua mọi action không nằm trong danh sách chỉ bên tham gia, và `CANCEL` không nằm trong danh sách đó. `assertEscrowAccess` cũng không được gọi cho `CANCEL` trong đường confirm. `lib/escrow/access.ts` ghi `CANCEL` chỉ dành cho bên tham gia. Cần quyết định: thêm `CANCEL` vào danh sách bên tham gia, hoặc ghi rõ admin được hủy. **Cập nhật:** mutation `cancelEscrow` đã gỡ khỏi schema (e28 kiểm vắng mặt), nên quyết định này hiện không áp dụng; giữ để tham chiếu nếu mutation được thêm lại.
 3. **Mutation mới.** Mutation của A4 và A5 sẽ thêm vào cuối bảng này khi merge.
+
+## Conversations, source và executable tests (2026-11-10)
+
+| Thao tác | Quyền |
+|---|---|
+| `openApplicationChat` | Chủ issue hoặc chính ứng viên; admin không có ngoại lệ |
+| Đọc APPLICATION | Chỉ client/ứng viên là participant; giữ lịch sử sau khi issue đóng |
+| Gửi/sửa/xóa trong APPLICATION | Participant, issue OPEN và application PENDING |
+| Đọc ISSUE_WORK | Client/developer là participant; admin chỉ đọc khi DISPUTED |
+| Gửi ISSUE_WORK | Client/developer ở AWAITING_FUNDING, IN_PROGRESS, DISPUTED; admin chỉ đọc |
+| Sửa/xóa ISSUE_WORK | Chính người gửi và phòng còn ghi được; khóa trong DISPUTED |
+| `markConversationRead` / badge / inbox | Chỉ dữ liệu của user hiện tại; read marker theo tin cuối đã xem, không theo giờ máy |
+| CHAT upload/download | Kiểm conversation membership và trạng thái; attachment phải thuộc đúng phòng và uploader trước khi gửi |
+| `setIssueSource`, sửa/generate/approve test, `rerunBaseCheck` | Client, issue OPEN, chưa có funding reservation đang hiệu lực |
+| `issueSource` | Client thấy context/error; người khác chỉ metadata READY của issue được phép xem |
+| Tải pinned snapshot | Client/developer; admin chỉ khi DISPUTED |
+| `runSubmissionTests` | Developer được giao, issue IN_PROGRESS, draft của chính mình; 1 run đang chạy/issue, tối đa 20 run/ngày |
+| `testRuns` | Client/developer của issue; admin |
+| `prepareSubmitWork` với executable tests | Phải PASSED cho đúng submission, bundle hiện tại và SHA256 patch hiện tại |
+
+GraphQL và socket dùng chung hàm lưu tin và AI guard. Reply/attachment khác
+conversation bị từ chối. `clientMessageId` giữ tính idempotent. Thay nguồn code
+hủy xác minh/approve cũ; test thiếu kết quả hoặc skipped không được xem là pass.

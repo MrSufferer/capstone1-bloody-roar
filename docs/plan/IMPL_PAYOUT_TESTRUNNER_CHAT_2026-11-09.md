@@ -533,40 +533,108 @@ Khuyến nghị: mỗi phase một phiên mới (`/clear` giữa các phase) đ�
 - [x] 1.1 Export wallet client từ shared
 - [x] 1.2 Schema auto-claim
 - [x] 1.3 Config relayer
-- [ ] 1.4 Job auto-claim
-- [ ] 1.5 Cảnh báo hết gas
-- [ ] 1.6 UI Dashboard
-- [ ] 1.7 Kiểm end-to-end local
+- [x] 1.4 Job auto-claim
+- [x] 1.5 Cảnh báo hết gas
+- [x] 1.6 UI Dashboard
+- [x] 1.7 Kiểm end-to-end local
 
 ### Phase 2: Review window từ lúc nộp
-- [ ] 2.1 Test contract (đỏ)
-- [ ] 2.2 Sửa contract
-- [ ] 2.3 ABI + fold
-- [ ] 2.4 Projection + server
-- [ ] 2.5 Deploy local + docs
+- [x] 2.1 Test contract (đỏ)
+- [x] 2.2 Sửa contract
+- [x] 2.3 ABI + fold
+- [x] 2.4 Projection + server
+- [x] 2.5 Deploy local + docs
 - [ ] 2.x (NGƯỜI DÙNG) Deploy Base Sepolia, cập nhật env production
 
 ### Phase 3: Test runner
-- [ ] 3.1 Schema
-- [ ] 3.2 Upload .patch / .zip
-- [ ] 3.3 `setIssueSource`
-- [ ] 3.4 Job snapshot
-- [ ] 3.5 Sandbox runner
-- [ ] 3.6 Job chạy test
-- [ ] 3.7 AI sinh test thực thi
-- [ ] 3.8 Khóa approve + terms hash
-- [ ] 3.9 Chạy test submission + gate
-- [ ] 3.10 UI
-- [ ] 3.11 Kiểm end-to-end
+- [x] 3.1 Schema
+- [x] 3.2 Upload .patch / .zip
+- [x] 3.3 `setIssueSource`
+- [x] 3.4 Job snapshot
+- [x] 3.5 Sandbox runner
+- [x] 3.6 Job chạy test
+- [x] 3.7 AI sinh test thực thi
+- [x] 3.8 Khóa approve + terms hash
+- [x] 3.9 Chạy test submission + gate
+- [x] 3.10 UI
+- [x] 3.11 Kiểm end-to-end
 
 ### Phase 4: Chat
-- [ ] 4.1 Schema
-- [ ] 4.2 Backfill
-- [ ] 4.3 Tạo hội thoại tự động
-- [ ] 4.4 Quyền
-- [ ] 4.5 GraphQL
-- [ ] 4.6 Socket
-- [ ] 4.7 UI inbox
-- [ ] 4.8 Dọn
+- [x] 4.1 Schema
+- [x] 4.2 Backfill
+- [x] 4.3 Tạo hội thoại tự động
+- [x] 4.4 Quyền
+- [x] 4.5 GraphQL
+- [x] 4.6 Socket
+- [x] 4.7 UI inbox
+- [x] 4.8 Dọn
 
 Thứ tự phase: 1 → 2 → 3 → 4. Phase 4 độc lập, có thể làm song song với 3 trên nhánh khác.
+
+
+## 9. Review và hoàn thiện bởi Codex — 2026-11-10
+
+Khi bắt đầu review, mới có task 1.1–1.3 hoàn tất. Các task code còn lại đã được
+triển khai, đọc lại các đường gọi liên quan và kiểm thử. Không tạo commit gộp
+vì worktree còn nhiều thay đổi có sẵn ngoài kế hoạch này. Không dùng sub-agent.
+
+Các lỗi/rủi ro đã xử lý:
+
+- Điều kiện retry auto-claim trong bản kế hoạch có thể gửi lại mỗi tick sau lỗi:
+  throttle bằng `autoClaimAt` cho cả thành công, lỗi và projection còn chậm.
+- Review timeout, fold, projection và UI đều tính 7 ngày từ lần nộp gần nhất.
+  Giữ nguyên hash vector terms; thêm fingerprint code vào text trước khi hash.
+- Vitest 2 trên image chỉ có Bun có thể tạo báo cáo rỗng. Image
+  `bloodyroar-test-runner:1` có Node thật để chạy Vitest, Bun cài dependency với
+  `--ignore-scripts`. Missing/skipped/error không đủ điều kiện approve.
+- Annotated Git tag: resolve `^{commit}` trước khi lưu `commitSha`; test đã đỏ
+  với SHA tag rồi xanh với SHA commit thật.
+- Draft chỉ được nộp sau PASSED của đúng submission/bundle/SHA256 patch.
+  Thay source hủy xác minh và approval cũ. Upload phải hoàn tất và khớp checksum.
+- Chat dùng chung persistence/AI guard cho HTTP và socket, khóa attachment/reply
+  theo conversation, retry serialization conflict, recheck quyền sửa tin trong
+  transaction. Read marker không chạy trước tin chưa commit; badge đúng khi
+  đang chờ funding. Đồng nhất payload NOTIFY để không phát trùng.
+- Seed chạy được trên DB mới: hội thoại của issue chưa chọn dev là APPLICATION;
+  fixture chỉ dành cho dữ liệu demo có sẵn không tạo FK mồ côi. UI E32 dùng
+  accessible label/toast hiện tại. Harness tách RPC/cache và tắt route warmup.
+
+Kiểm chứng cuối:
+
+| Lệnh / suite | Kết quả |
+|---|---|
+| `bun run typecheck` | PASS |
+| `bun run lint` | PASS |
+| `bun run build` | PASS |
+| `DOCKER_TESTS=1 bun run --cwd apps/web test` | 661/661, 104 file, không skip |
+| `DOCKER_TESTS=1 GITHUB_TESTS=1 bun run --cwd apps/worker test` | 88/88, 29 file, không skip |
+| `bun run --cwd packages/database test` | 4/4 |
+| `bun run --cwd apps/web test:integration` | 2/2 |
+| `bun run contracts:test` | 36/36 |
+| `bun run --cwd apps/contracts test:fuzz` | 13/13, mỗi invariant 512 runs, tổng 32768 calls |
+| `bun run --cwd apps/contracts test:fork` | 1/1 trên Base Sepolia fork; không deploy mạng thật |
+| `bun run test:e2e:backend` | 43/43 backend E2E; đã chạy lại UI riêng sau sửa selector |
+| `E2E_UI_ONLY=1 bun run test:e2e:local` | 3/3 UI, gồm E32 và E34 desktop/mobile/badge |
+| `git diff --check` | PASS |
+
+Các suite DB chạy trên DB test riêng. Migration cũng đã áp lên DB hiện tại:
+25 migrations up to date, giữ đủ 98 users / 367 issues / 1121 messages / 144
+attachments ngay sau migration, không còn message thiếu conversation. Có backup
+messages/attachments trước migration. Backfill chạy lại trả 0 dòng cần chuyển.
+`db:seed:local` và `db:seed:demo` đã chạy xong; seed vẫn giữ 1121 messages.
+
+Deploy local mới trên RPC 8545: escrow
+`0xd20fFD09d17d95993b4842375fA07b2bEBc74647`, block 26; token
+`0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82`. Đã cập nhật `.env`, kiểm tra ABI
+`submittedAt`, manifest và env khớp. Tiến trình web/worker đang mở từ trước cần
+restart để nạp code và cấu hình mới; không tự dừng các phiên đang sử dụng.
+
+Giả định/giới hạn giữ theo kế hoạch: snapshot dùng đĩa chung một máy; native
+install scripts không được bật; `commitSha` là metadata bổ sung còn runner yêu
+cầu patch/diff; AI test dùng fixture xác định, không đánh giá chất lượng model
+thật. Auto-claim cần relayer key/gas, test runner cần bật env; mặc định không tự
+đổi các cấu hình này. `security-review`/`simplify` không có trong skill catalog
+phiên này, nên đã review thủ công sandbox, upload, quyền và các đường gọi.
+`forge fmt --check` còn báo formatting có sẵn trong contract/mocks ngoài thay
+đổi logic; không reformat hàng loạt. Base Sepolia deploy vẫn dành cho người dùng
+đúng checkbox 2.x, không thực hiện trong phiên này.

@@ -40,3 +40,56 @@ Lệnh đặt role `ADMIN` và ghi một dòng `AdminLog` (action `grant_admin`,
 ## 5. Dừng server
 
 `SIGTERM` (Railway gửi khi redeploy): đóng Socket.IO, đóng HTTP server, ngắt Prisma, rồi thoát `0`. Nếu chưa xong sau 10 giây, tiến trình thoát `1`.
+
+## Auto-claim
+
+Worker dùng `RELAYER_PRIVATE_KEY` để trả gas cho `claim(recipient)`. Ví nhận tiền
+vẫn là client/developer, không phải relayer. Không có key thì job tắt. Chỉ nạp ETH
+gas vào relayer; không dùng ví client, developer hoặc fee recipient.
+
+Job chạy mỗi 15 giây, tối đa 10 ví/tick, chỉ lấy ví user đã đăng ký và đúng
+chain/contract, bỏ fee recipient. Mỗi lần thử cách nhau ít nhất 10 phút, kể cả
+gửi lỗi hoặc projection còn chậm. Indexer xác nhận event `Claimed` rồi đưa số dư
+về 0. Dashboard hiện pending nhưng giữ Withdraw làm dự phòng.
+
+`RELAYER_MIN_GAS_WEI=1000000000000000` là ngưỡng mặc định. Alert
+`RELAYER_LOW_GAS` chỉ phát một lần cho đến khi số dư phục hồi. Theo dõi alert và
+log job, nạp ETH nếu thấp hơn ngưỡng; không đổi khóa chỉ để xử lý thiếu gas.
+
+Kiểm chứng ngày 2026-11-10: `bun run test:e2e:backend`, scenario
+`tests/e2e/e33-auto-claim.test.ts`. Tạo issue → fund → submit → release → relayer
+claim; xác nhận event, USDC tăng đúng số claimable và projection về 0 trong dưới
+một phút. Test dùng Hardhat/DB riêng, relayer riêng được cấp gas bằng RPC local.
+
+## Test runner và migration chat
+
+Trước khi bật `TEST_RUNNER_ENABLED=true` trên worker:
+
+```bash
+docker build -t bloodyroar-test-runner:1 -f apps/worker/runner/Dockerfile apps/worker/runner
+docker pull python:3.12-slim
+bun run --cwd packages/database db:migrate:prod
+bun run --cwd packages/database db:backfill:conversations
+```
+
+Image JS có Node 22 để chạy Vitest và Bun để cài package với `--ignore-scripts`.
+Không bật lifecycle scripts cho source upload. Dự án cần native build riêng có
+thể trả ERROR/No result; kết quả đó không được dùng để approve test.
+Container test không có mạng, chạy UID 1000, giới hạn CPU/RAM/PID, root filesystem
+chỉ đọc và chỉ mount thư mục làm việc. Không truyền secret của worker vào Docker.
+
+`SNAPSHOT_DIR` mặc định `.data/snapshots`, tính từ repo root. Web và worker cần
+truy cập cùng thư mục để tải pinned snapshot. Với nhiều máy worker, cần chuyển
+lưu snapshot sang shared storage trước khi mở rộng. Snapshot lỗi trả FAILED;
+run kẹt quá 20 phút được cleanup chuyển ERROR.
+
+Migration backfill chat chạy trước khi đặt `conversationId` NOT NULL và bỏ
+`readAt`; giữ nguyên nội dung, người gửi, thời gian và attachment cũ. Script
+backfill có thể chạy lại. Sau triển khai cần restart web/worker cùng phiên bản
+schema mới. Không chạy test reset DB trên database đang sử dụng.
+
+Python runner chỉ cài wheel từ `requirements.txt` hoặc `project.dependencies` trong
+`pyproject.toml`; không build/cài chính project. Chỉ hỗ trợ dependency theo tên,
+không hỗ trợ đường dẫn local, URL hoặc pip directives.
+Khi deploy thật, phải chặn egress của container cài dependency tới dải IP nội bộ,
+loopback và endpoint metadata cloud ở firewall/network của host.
