@@ -1,9 +1,12 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
 import { prisma } from "@bloody-roar/database";
 import { handleReorg } from "../src/indexer/reorg";
 import { cleanupChain, fakeRpc, newChain, rawLog, scanToHead, testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 
@@ -28,7 +31,7 @@ test("a reorg marks orphaned events non-canonical and re-includes events that mo
     rawLog({ address, block: 105, blockHash: "0xA105", tx: "0xtx4" }),
   ];
   await scanToHead({ db: prisma, rpc: fakeRpc(chain), config });
-  expect(await handleReorg({ db: prisma, rpc: fakeRpc(chain), config })).toBeNull();
+  expect(await handleReorg({ db: prisma, rpc: fakeRpc(chain), config })).toEqual({ verifiedTip: { number: 105n, hash: "0xA105" } });
 
   // Blocks 104 and 105 are replaced. tx3 is included again in the new block 104. tx4 is gone.
   chain.blockHash.set(104n, "0xB104");
@@ -89,4 +92,46 @@ test("a second reorg is detected before a rewound scanner catches up", async () 
   chain.blockHash.set(101n, "0xC101");
   expect(await handleReorg({ db: prisma, rpc: fakeRpc(chain), config })).toEqual({ rewoundTo: 99n });
   expect((await prisma.chainEvent.findFirstOrThrow({ where: { ...where, txHash: "0xfirst" } })).canonical).toBe(false);
+});
+
+test("two-block reorg recovers with no escrow event at the window boundary", async () => {
+  await cleanupChain(prisma, config);
+  const limited = { ...config, escrowDeployBlock: 0n, reorgWindow: 64 };
+  const chain = newChain(); chain.safe = 300n;
+  for (let n = 0n; n <= 300n; n++) chain.blockHash.set(n, `0xA${n}`);
+  chain.logs = [rawLog({ address, block: 300, blockHash: "0xA300", tx: "0xshallow" })];
+  await scanToHead({ db: prisma, rpc: fakeRpc(chain), config: limited });
+  const hashes = (await prisma.projectionCheckpoint.findUniqueOrThrow({ where: { chainId_contractAddress: where } })).canonicalBlockHashes as Record<string, string>;
+  expect(Object.keys(hashes)).toHaveLength(65);
+  expect(hashes["236"]).toBe("0xA236");
+  chain.blockHash.set(299n, "0xB299"); chain.blockHash.set(300n, "0xB300");
+  chain.logs = [];
+  expect(await handleReorg({ db: prisma, rpc: fakeRpc(chain), config: limited })).toEqual({ rewoundTo: 236n });
+  await scanToHead({ db: prisma, rpc: fakeRpc(chain), config: limited });
+  expect((await prisma.projectionCheckpoint.findUniqueOrThrow({ where: { chainId_contractAddress: where } })).lastScannedBlock).toBe(300n);
+  expect((await prisma.chainEvent.findFirstOrThrow({ where: { ...where, txHash: "0xshallow" } })).canonical).toBe(false);
+});
+
+test("a reorg beyond the window stops without changing the cursor or events", async () => {
+  await cleanupChain(prisma, config);
+  const limited = { ...config, reorgWindow: 2, alertWebhookUrl: "https://example.test/alert" };
+  const chain = newChain(); chain.safe = 103n;
+  for (const n of [99n, 100n, 101n, 102n, 103n]) chain.blockHash.set(n, `0xA${n}`);
+  chain.logs = [rawLog({ address, block: 103, blockHash: "0xA103", tx: "0xdeep" })];
+  await scanToHead({ db: prisma, rpc: fakeRpc(chain), config: limited });
+  for (const n of [101n, 102n, 103n]) chain.blockHash.set(n, `0xB${n}`);
+  const originalFetch = globalThis.fetch;
+  let alerts: string[] = [];
+  let alertCount = 0;
+  globalThis.fetch = (async (_url, init) => { alertCount++; alerts = JSON.parse(String(init?.body)).alerts; return new Response(); }) as typeof fetch;
+  try {
+    await expect(handleReorg({ db: prisma, rpc: fakeRpc(chain), config: limited })).rejects.toThrow("REORG_BEYOND_WINDOW");
+    expect(alerts).toEqual(["REORG_BEYOND_WINDOW"]);
+    await expect(handleReorg({ db: prisma, rpc: fakeRpc(chain), config: limited })).rejects.toThrow("REORG_BEYOND_WINDOW");
+    expect(alertCount).toBe(1);
+  } finally { globalThis.fetch = originalFetch; }
+  expect((await prisma.projectionCheckpoint.findUniqueOrThrow({ where: { chainId_contractAddress: where } })).lastScannedBlock).toBe(103n);
+  expect((await prisma.chainEvent.findFirstOrThrow({ where: { ...where, txHash: "0xdeep" } })).canonical).toBe(true);
+});
+
 });

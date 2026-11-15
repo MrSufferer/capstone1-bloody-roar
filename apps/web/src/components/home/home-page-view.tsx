@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { graphqlRequest } from "@/lib/graphql-client";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/store/use-auth-store";
 import { IssueCard, type IssueItem } from "@/components/marketplace/issue-card";
 import { WolfLogo } from "@/components/ui/wolf-logo";
+import { HomeBanner } from "./home-banner";
 import { useUiPreferences } from "@/lib/ui-preferences";
 
 const ISSUES_QUERY = `
@@ -45,13 +47,13 @@ type StatsResponse = {
   };
 };
 
-export function HomePageView({ search = "" }: { search?: string }) {
+export function HomePageView() {
+  const queryClient = useQueryClient();
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const status = useAuthStore((state) => state.status);
   const { theme, t } = useUiPreferences();
 
-  const [searchTerm, setSearchTerm] = useState(search);
   const [activeSort, setActiveSort] = useState<"HOT" | "CLOSING" | "HIGHEST" | "NEWEST">("HOT");
   const [issues, setIssues] = useState<IssueItem[]>([]);
   const [openBountiesCount, setOpenBountiesCount] = useState<number | null>(null);
@@ -66,7 +68,7 @@ export function HomePageView({ search = "" }: { search?: string }) {
 
   useEffect(() => {
     let active = true;
-    graphqlRequest<IssuesResponse>(ISSUES_QUERY, { first: 6 })
+    queryClient.fetchQuery({ queryKey: ["home-issues"], queryFn: () => graphqlRequest<IssuesResponse>(ISSUES_QUERY, { first: 6 }) })
       .then((res) => {
         if (!active) return;
         const edges = res?.issues?.edges ?? [];
@@ -79,7 +81,7 @@ export function HomePageView({ search = "" }: { search?: string }) {
         setOpenBountiesCount(null);
       });
 
-    graphqlRequest<StatsResponse>(STATS_QUERY)
+    queryClient.fetchQuery({ queryKey: ["marketplace-stats"], queryFn: () => graphqlRequest<StatsResponse>(STATS_QUERY) })
       .then((res) => {
         if (!active || !res?.marketplaceStats) return;
         const stats = res.marketplaceStats;
@@ -98,16 +100,7 @@ export function HomePageView({ search = "" }: { search?: string }) {
     return () => {
       active = false;
     };
-  }, []);
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchTerm.trim()) {
-      router.push(`/marketplace?search=${encodeURIComponent(searchTerm.trim())}`);
-    } else {
-      router.push("/marketplace");
-    }
-  };
+  }, [queryClient]);
 
   const sortedIssues = [...issues].sort((a, b) => {
     if (activeSort === "HIGHEST") return b.bountyAmount - a.bountyAmount;
@@ -122,67 +115,7 @@ export function HomePageView({ search = "" }: { search?: string }) {
 
   return (
     <div className={`br ${theme === "dark" ? "dark" : ""}`}>
-      {/* Hero Section */}
-      <section className="hero">
-        <div className="hero-in">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 mb-4 rounded-full border border-[var(--line-2)] bg-[var(--surface)] shadow-xs">
-              <WolfLogo size={20} />
-              <span className="text-xs font-semibold tracking-wide uppercase text-[var(--brand)]">Bloody-Roar Network</span>
-              <span className="text-xs text-[var(--ink-3)]">· Base Sepolia Escrow</span>
-            </div>
-            <h1 className="display">Get paid in USDC for fixing real issues.</h1>
-            <p className="lead">
-              Clients post GitHub issues with a reward. Developers apply, deliver a pull request, and get paid by an escrow contract that neither side, nor the platform, can touch.
-            </p>
-            <form className="bigsearch" role="search" onSubmit={handleSearchSubmit}>
-              <div className="search">
-                <label className="sr" htmlFor="q-home">Search bounties</label>
-                <Search className="ico" />
-                <input
-                  id="q-home"
-                  type="search"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Try “reentrancy”, “playwright” or a repo name"
-                />
-              </div>
-              <button type="submit" className="btn btn-p">Search</button>
-            </form>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 14, fontSize: "12.5px", color: "var(--ink-3)" }}>
-              <span>Popular</span>
-              {["solidity", "typescript", "react", "foundry", "rust", "playwright"].map((skill) => (
-                <Link key={skill} className="tag" href={`/marketplace?skills=${skill}`}>
-                  {skill}
-                </Link>
-              ))}
-            </div>
-          </div>
-
-          <div className="figs" aria-label="Marketplace numbers">
-            <div className="fig">
-              <div className="lab">Open bounties</div>
-              <div className="v mono">{openBountiesCount ?? "—"}</div>
-              <div className="d">across 9 categories</div>
-            </div>
-            <div className="fig">
-              <div className="lab">Locked in escrow</div>
-              <div className="v mono" style={{ color: "var(--gold)" }}>{escrowTotal ?? "—"}</div>
-              <div className="d">USDC, confirmed on-chain</div>
-            </div>
-            <div className="fig">
-              <div className="lab">Active developers</div>
-              <div className="v mono">{activeDevelopers != null ? activeDevelopers.toLocaleString() : "—"}</div>
-              <div className="d">applied in the last 30 days</div>
-            </div>
-            <div className="fig">
-              <div className="lab">Paid out</div>
-              <div className="v mono" style={{ color: "var(--gold)" }}>612,080</div>
-              <div className="d">USDC since launch</div>
-            </div>
-          </div>
-        </div>
-      </section>
+      <HomeBanner stats={{ open: openBountiesCount, escrow: escrowTotal, developers: activeDevelopers }} />
 
       {/* Main Content Grid */}
       <div className="wrap">
@@ -309,31 +242,7 @@ export function HomePageView({ search = "" }: { search?: string }) {
             </aside>
           </div>
 
-          {/* Contract Rules Section */}
-          <section id="rules" style={{ marginTop: 36, display: "flex", flexDirection: "column", gap: 14 }}>
-            <div>
-              <h2 className="h1" style={{ fontSize: 22 }}>Escrow rules, fixed in the contract</h2>
-              <p className="sub">Every number below is a constant in BloodyRoarEscrow.sol. Nobody can change them for a funded bounty.</p>
-            </div>
-            <div className="rules">
-              <div className="rule">
-                <div className="v mono">24 h</div>
-                <p>For the client to fund after selecting a developer. Otherwise the bounty reopens.</p>
-              </div>
-              <div className="rule">
-                <div className="v mono">+7 days</div>
-                <p>Review window after the delivery deadline. Silence lets the developer claim.</p>
-              </div>
-              <div className="rule">
-                <div className="v mono">72 h</div>
-                <p>For the other side to add evidence once a dispute opens. No ruling before it closes.</p>
-              </div>
-              <div className="rule">
-                <div className="v mono">2.5%</div>
-                <p>Platform fee, taken from the developer share only. A full refund pays no fee.</p>
-              </div>
-            </div>
-          </section>
+
         </main>
       </div>
 
@@ -345,7 +254,7 @@ export function HomePageView({ search = "" }: { search?: string }) {
               <WolfLogo size={36} />
               <span className="font-bold tracking-tight text-lg">Bloody-Roar</span>
             </span>
-            <span style={{ color: "var(--ink-3)" }}>Bounty marketplace with on-chain USDC escrow on Base Sepolia.</span>
+            <span style={{ color: "var(--ink-3)" }}>Bounty marketplace with on-chain USDC escrow.</span>
           </div>
           <nav aria-label="Marketplace">
             <span className="lab">Marketplace</span>
@@ -356,9 +265,9 @@ export function HomePageView({ search = "" }: { search?: string }) {
           </nav>
           <nav aria-label="Escrow">
             <span className="lab">Escrow</span>
-            <Link href="/#rules">How it works</Link>
-            <Link href="/#rules">Contract rules</Link>
-            <Link href="/#rules">Disputes and arbiter</Link>
+            <Link href="/guide">How it works</Link>
+            <Link href="/guide#rules">Contract rules</Link>
+            <Link href="/guide#disputes">Disputes and arbiter</Link>
           </nav>
           <nav aria-label="Project">
             <span className="lab">Project</span>

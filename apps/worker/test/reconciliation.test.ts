@@ -1,8 +1,11 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { prisma } from "@bloody-roar/database";
 import { reconcileProjections } from "../src/reconciler/projections";
 import { cleanupChain, fakeRpc, newChain, testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const config = testConfig();
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
@@ -17,4 +20,6 @@ test("skips comparison while the indexer is behind the selected head", async () 
   chain.blockHash.set(100n, "0xabc100");
   expect(await reconcileProjections({ db: prisma, rpc: fakeRpc(chain), config, now: () => new Date() })).toBeNull();
   expect(await prisma.reconciliationFinding.count({ where: { kind: { startsWith: `chain:${config.chainId}:${config.escrowAddress}:` } } })).toBe(0);
+});
+
 });

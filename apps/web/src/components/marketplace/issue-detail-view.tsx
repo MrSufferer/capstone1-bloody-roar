@@ -1,15 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useToastState } from "@/lib/toast";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { issueStatus } from "@/lib/issue-status";
 import { canWriteIssueChat } from "@/lib/chat-access";
 import { ArrowLeft, Eye, MessageSquare, ShieldCheck, Users, ExternalLink, Clock } from "lucide-react";
 import { graphqlRequest } from "@/lib/graphql-client";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/store/use-auth-store";
-import { ChatRoom } from "@/components/chat/chat-room";
+import { IssueChatRoom as ChatRoom } from "@/components/chat/chat-room";
+import { SourcePanel } from "@/components/issues/source-panel";
+import { TestRunPanel } from "@/components/issues/test-run-panel";
 import { TestCasePanel } from "@/components/issues/test-case-panel";
 import { IssueComments } from "@/components/marketplace/issue-comments";
 import { Button } from "@/components/ui/button";
@@ -32,7 +37,7 @@ const UNREAD_QUERY = `query UnreadMessages($issueId: String!) { unreadMessageCou
 const ISSUE_QUERY = `
   query IssueDetail($id: ID!) {
     issue(id: $id) {
-      id title description category status bountyAmount { formatted raw decimals } requiredSkills difficulty timeEstimate
+      id title description category status githubRepo bountyAmount { formatted raw decimals } requiredSkills difficulty timeEstimate
       expiresAt viewCount applicationCount createdAt clientId developerId
       viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout }
       escrow { availableActions { action reasonDisabled } }
@@ -74,7 +79,7 @@ const SUBMIT_FUNDING_INTENT = `mutation FundingIntent($id: ID!, $signature: Stri
 const PREPARE_DEPOSIT = `mutation PrepareDeposit($id: ID!) { prepareEscrowDeposit(reservationId: $id) { steps { intentId method contractAddress data value } } }`;
 const CANCEL_RESERVATION = `mutation CancelReservation($id: ID!) { cancelReservation(reservationId: $id) { id status } }`;
 const RECORD_TX = `mutation RecordTx($id: ID!, $hash: String!) { recordTransactionSubmitted(intentId: $id, txHash: $hash) { id } }`;
-const CREATE_DRAFT = `mutation CreateDraft($issue: ID!, $description: String!, $pullRequestUrl: String, $commitSha: String, $files: [ID!]) { createSubmissionDraft(issueId: $issue, description: $description, pullRequestUrl: $pullRequestUrl, commitSha: $commitSha, attachmentIds: $files) { id } }`;
+const CREATE_DRAFT = `mutation CreateDraft($issue: ID!, $submission: ID, $description: String!, $pullRequestUrl: String, $commitSha: String, $files: [ID!]) { createSubmissionDraft(issueId: $issue, submissionId: $submission, description: $description, pullRequestUrl: $pullRequestUrl, commitSha: $commitSha, attachmentIds: $files) { id } }`;
 const PREPARE_SUBMIT = `mutation PrepareSubmit($id: ID!) { prepareSubmitWork(submissionId: $id) { intentId method contractAddress data value } }`;
 const PREPARE_RELEASE = `mutation PrepareRelease($id: ID!) { prepareReleaseFunds(issueId: $id) { intentId method contractAddress data value } }`;
 const REQUEST_CHANGES = `mutation RequestChanges($id: ID!, $notes: String!) { requestChanges(submissionId: $id, notes: $notes) { changesRequested } }`;
@@ -101,7 +106,7 @@ type PreparedStep = { intentId: string; method: string; contractAddress: string;
 type ReservationRow = { id: string; status: string; chainId: number; contractAddress: string; tokenAddress: string; escrowKey: string; termsHash: string; amountRaw: string; deliveryDeadline: string; clientWallet: string; developerWallet: string };
 
 type ViewerCapabilities = { canApply?: boolean; canSelect: boolean; canFund: boolean; canSubmit: boolean; canRelease: boolean; canRequestChanges: boolean; canDispute: boolean; canProposeSettlement: boolean; canRevokeSettlement: boolean; canAcceptSettlement: boolean; canSubmitEvidence: boolean; canChallengeRuling: boolean; canFinalizeRuling: boolean; canFinalizeArbiterTimeoutSplit: boolean; canClaimMissedDeliveryRefund: boolean; canClaimReviewTimeout: boolean };
-type IssueDetail = IssueItem & { bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
+type IssueDetail = IssueItem & { githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
 type Application = { id: string; status: string; message?: string | null; createdAt: string; developer: IssueItem["client"] & { skills?: string[] } };
 
 type DetailResponse = { issue: (Omit<IssueDetail, "bountyAmount" | "bountyRaw" | "bountyDecimals"> & { bountyAmount: { formatted: string; raw: string; decimals: number } }) | null };
@@ -116,7 +121,11 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export function IssueDetailView({ issueId }: { issueId: string }) {
+  const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const queryClient = useQueryClient();
+  const currentView = useRef({ issueId, userId: user?.id });
+  currentView.current = { issueId, userId: user?.id };
   const { theme } = useUiPreferences();
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -132,6 +141,9 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const [reviewComment, setReviewComment] = useState("");
   const [deliveryDeadline, setDeliveryDeadline] = useState(defaultDeliveryDeadline);
   const [showDisputeForm, setShowDisputeForm] = useState(false);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [requiresTests, setRequiresTests] = useState(false);
+  const [testsPassed, setTestsPassed] = useState(false);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [deliveryDescription, setDeliveryDescription] = useState("");
   const [pullRequestUrl, setPullRequestUrl] = useState("");
@@ -140,54 +152,78 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const [activeTab, setActiveTab] = useState<"overview" | "delivery" | "chat" | "escrow">("overview");
   const [isLoading, setIsLoading] = useState(true);
   const [isWorking, setIsWorking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useToastState("error");
+  const [, setNotice] = useToastState("success");
   const [myApplication, setMyApplication] = useState<{ id: string; status: string; message?: string | null } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editCategory, setEditCategory] = useState("BUG_FIX");
   const [editBounty, setEditBounty] = useState<number>(0);
+  const chainTimer = useRef<number | null>(null);
+  const stopChain = useCallback(() => {
+    if (chainTimer.current !== null) window.clearInterval(chainTimer.current);
+    chainTimer.current = null;
+    setChainPending(false);
+  }, []);
 
   // Refreshes in place; the full-page loader and error reset happen only when the issue id changes (see effect below).
   const load = useCallback(async () => {
+    const isCurrent = () => currentView.current.issueId === issueId && currentView.current.userId === user?.id;
     try {
       const result = await graphqlRequest<DetailResponse>(ISSUE_QUERY, { id: issueId });
+      if (!isCurrent()) return;
       if (result.issue) {
+        queryClient.setQueryData(["issue-detail", issueId, user?.id ?? null], result.issue);
         setIssue({ ...result.issue, bountyAmount: Number(result.issue.bountyAmount.formatted), bountyRaw: result.issue.bountyAmount.raw, bountyDecimals: result.issue.bountyAmount.decimals });
       } else {
         setIssue(null);
-        setError("Không tìm thấy bài toán.");
+        setError("Bounty not found.");
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Không tìm thấy bài toán.");
+      if (isCurrent()) setError(reason instanceof Error ? reason.message : "Bounty not found.");
     } finally {
-      setIsLoading(false);
+      if (isCurrent()) setIsLoading(false);
     }
-  }, [issueId]);
+  }, [issueId, queryClient, user?.id, setError]);
 
-  useEffect(() => { setIsLoading(true); setError(null); void load(); }, [load]);
+  useEffect(() => {
+    const key = ["issue-detail", issueId, user?.id ?? null];
+    const cached = queryClient.getQueryData<NonNullable<DetailResponse["issue"]>>(key);
+    setError(null);
+    if (cached) {
+      setIssue({ ...cached, bountyAmount: Number(cached.bountyAmount.formatted), bountyRaw: cached.bountyAmount.raw, bountyDecimals: cached.bountyAmount.decimals });
+      setIsLoading(false);
+    } else { setIssue(null); setIsLoading(true); }
+    if (!cached || Date.now() - (queryClient.getQueryState(key)?.dataUpdatedAt ?? 0) >= 60_000) void load();
+  }, [issueId, load, queryClient, user?.id, setError]);
 
   // Live refresh: the server emits escrow:invalidate to the task room when a confirmed transaction changes the escrow.
   useEffect(() => {
     if (!user) return;
     const socket = io({ withCredentials: true, transports: ["websocket"] });
     socket.emit("task:join", issueId);
-    socket.on("escrow:invalidate", () => { void load(); });
+    socket.on("escrow:invalidate", () => { stopChain(); void load(); });
     return () => { socket.disconnect(); };
-  }, [user, issueId, load]);
+  }, [user, issueId, load, stopChain]);
 
   // Fallback after an on-chain action: refresh every 4 seconds, up to 30 times, while the chain confirms.
   const [chainPending, setChainPending] = useState(false);
   const awaitChain = useCallback(() => {
+    if (chainTimer.current !== null) window.clearInterval(chainTimer.current);
     setChainPending(true);
     let tries = 0;
-    const timer = window.setInterval(() => {
+    let loading = false;
+    chainTimer.current = window.setInterval(() => {
       tries += 1;
-      void load();
-      if (tries >= 30) { window.clearInterval(timer); setChainPending(false); }
+      if (!loading) {
+        loading = true;
+        void load().finally(() => { loading = false; });
+      }
+      if (tries >= 30) stopChain();
     }, 4000);
-  }, [load]);
+  }, [load, stopChain]);
+  useEffect(() => () => { if (chainTimer.current !== null) window.clearInterval(chainTimer.current); }, [issueId]);
 
   const isClient = Boolean(user && issue?.clientId === user.id);
   // The server's availability entry for an action; absent means the action does not apply to this task right now.
@@ -210,13 +246,13 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const canChat = Boolean(user && (isClient || isDeveloper || (isAdmin && issue?.status === "DISPUTED")));
 
   useEffect(() => {
-    if (!isClient || !issue) return;
+    if (!isClient) return;
     let active = true;
     void graphqlRequest<ApplicationResponse>(APPLICATIONS_QUERY, { issueId })
       .then((result) => { if (active) setApplications(result.applications); })
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load applications."); });
     return () => { active = false; };
-  }, [isClient, issue, issueId]);
+  }, [isClient, issueId, setError]);
 
   useEffect(() => {
     if (!user || isClient || isAdmin) return;
@@ -280,17 +316,17 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     }
   };
 
+  const saveDraft = async () => {
+    const draft = await graphqlRequest<{ createSubmissionDraft: { id: string } }>(CREATE_DRAFT, { issue: issueId, submission: draftId, description: deliveryDescription.trim(), pullRequestUrl: pullRequestUrl.trim() || null, commitSha: commitSha.trim() || null, files: deliveryFiles });
+    setDraftId(draft.createSubmissionDraft.id); return draft.createSubmissionDraft.id;
+  };
+  useEffect(() => { setDraftId(null); setTestsPassed(false); }, [issueId, deliveryDescription, pullRequestUrl, commitSha, deliveryFiles]);
+
   const submitDelivery = async (event: React.FormEvent) => {
     event.preventDefault(); setIsWorking(true); setError(null); setNotice(null);
     try {
-      const draft = await graphqlRequest<{ createSubmissionDraft: { id: string } }>(CREATE_DRAFT, {
-        issue: issueId,
-        description: deliveryDescription.trim(),
-        pullRequestUrl: pullRequestUrl.trim() || null,
-        commitSha: commitSha.trim() || null,
-        files: deliveryFiles,
-      });
-      const prepared = await graphqlRequest<{ prepareSubmitWork: PreparedStep }>(PREPARE_SUBMIT, { id: draft.createSubmissionDraft.id });
+      const id = await saveDraft();
+      const prepared = await graphqlRequest<{ prepareSubmitWork: PreparedStep }>(PREPARE_SUBMIT, { id });
       await sendPreparedCalls([prepared.prepareSubmitWork], recordTx, user!.walletAddress);
       setDeliveryDescription(""); setPullRequestUrl(""); setCommitSha(""); setDeliveryFiles([]); setUploadStatus(null);
       const refreshed = await graphqlRequest<SubmissionResponse>(SUBMISSIONS_QUERY, { issueId });
@@ -384,6 +420,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     setIsWorking(true); setError(null); setNotice(null);
     try {
       await graphqlRequest(REJECT_APPLICATION, { id: applicationId });
+      setApplications((current) => current.map((app) => app.id === applicationId ? { ...app, status: "REJECTED" } : app));
       setNotice("Applicant rejected.");
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not reject applicant."); }
@@ -431,6 +468,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
       setReservationId(result.selectDeveloper.id);
       setNotice("Developer selected. Fund the escrow to start the work.");
       await load();
+      setApplications((await graphqlRequest<ApplicationResponse>(APPLICATIONS_QUERY, { issueId })).applications);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not select developer."); }
     finally { setIsWorking(false); }
   };
@@ -497,7 +535,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   if (!issue) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16 text-center">
-        <MarketplaceEmpty onResetFilters={() => { window.location.href = "/marketplace"; }} />
+        <MarketplaceEmpty onResetFilters={() => { router.push("/marketplace"); }} />
         {error && <p className="mt-4 text-sm" style={{ color: "var(--bad)" }}>{error}</p>}
       </main>
     );
@@ -595,9 +633,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
           </div>
 
           {/* Notices & Banners */}
-          {notice && <div className="banner bn-info" style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}><div><b>Notice:</b> {notice}</div><button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} style={{ cursor: "pointer" }}>✕</button></div>}
-          {chainPending && <div className="banner bn-info"><div>Đang chờ chain xác nhận</div></div>}
-          {error && <div className="banner bn-bad" style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}><div><b>Error:</b> {error}</div><button type="button" aria-label="Dismiss" onClick={() => setError(null)} style={{ cursor: "pointer" }}>✕</button></div>}
+          {chainPending && <div className="banner bn-info"><div>Waiting for chain confirmation</div></div>}
 
           {/* Main 2-column Grid */}
           <div className="cols">
@@ -754,7 +790,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                         )}
                         {reservationId && issue.viewerCapabilities?.canFund && (
                           <button type="button" className="btn btn-o btn-sm" style={{ marginBottom: 12 }} disabled={isWorking} onClick={() => void cancelFunding()}>
-                            Hủy giữ chỗ
+                            Cancel reservation
                           </button>
                         )}
                         {applications.map((app) => (
@@ -790,6 +826,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                                 {app.message || "No cover letter provided."}
                               </p>
                             </div>
+                            <Button type="button" variant="outline" size="sm" onClick={() => { void graphqlRequest<{ openApplicationChat: string }>(`mutation OpenChat($id: ID!) { openApplicationChat(applicationId: $id) }`, { id: app.id }).then((r) => router.push(`/messages?c=${r.openApplicationChat}`)).catch((e) => setError(e.message)); }}>Message</Button>
                             {app.status === "PENDING" && issue.status === "OPEN" && issue.viewerCapabilities?.canSelect && (
                               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 <button
@@ -817,7 +854,8 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                     </section>
                   )}
 
-                  <TestCasePanel issueId={issue.id} owner={isClient} issueStatus={issue.status} />
+                  <SourcePanel key={issue.id} issueId={issue.id} repository={issue.githubRepo ?? null} editable={isClient && issue.status === "OPEN"} />
+                  <TestCasePanel issueId={issue.id} owner={isClient} issueStatus={issue.status} onExecutableChange={setRequiresTests} />
                   <IssueComments issueId={issue.id} ownerId={issue.clientId} />
                 </>
               )}
@@ -839,6 +877,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                         <form onSubmit={submitDelivery} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                           <FormField label="Summary of changes" hint="What changed and how the client can verify it.">
                             <textarea
+                              aria-label="Summary of changes"
                               className="inp"
                               rows={4}
                               maxLength={4000}
@@ -889,11 +928,16 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                             type="submit"
                             className="btn btn-p"
                             style={{ alignSelf: "flex-start" }}
-                            disabled={isWorking || !actionEnabled("submitWork") || (!deliveryDescription.trim() && !pullRequestUrl.trim() && deliveryFiles.length === 0)}
+                            disabled={isWorking || (requiresTests && !testsPassed) || !actionEnabled("submitWork") || (!deliveryDescription.trim() && !pullRequestUrl.trim() && deliveryFiles.length === 0)}
                             title={actionOf("submitWork")?.reasonDisabled ?? undefined}
                           >
                             Submit for review
                           </button>
+                          {requiresTests && <>
+                            <Button type="button" variant="outline" disabled={isWorking} onClick={() => { setIsWorking(true); void saveDraft().catch((e) => setError(e.message)).finally(() => setIsWorking(false)); }}>Save draft to run tests</Button>
+                            {draftId && <TestRunPanel key={draftId} issueId={issueId} submissionId={draftId} canRun onPassed={setTestsPassed} />}
+                            {!testsPassed && <p className="text-sm">Pass the approved tests before submitting.</p>}
+                          </>}
                           {reasonLine("submitWork")}
                         </form>
                       </div>
@@ -944,6 +988,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                               </p>
                             )}
 
+                            {requiresTests && <TestRunPanel issueId={issueId} submissionId={sub.id} />}
                             {sub.reviewNotes && (
                               <div style={{ background: "var(--surface-2)", padding: 10, borderRadius: 6, fontSize: 12.5, color: "var(--ink-2)" }}>
                                 <b>Review notes:</b> {sub.reviewNotes}
@@ -1072,7 +1117,6 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                 <section className="card">
                   <div className="card-h">
                     <h2>Escrow Contract Rules &amp; Breakdown</h2>
-                    <span className="badge b-info" style={{ marginLeft: "auto" }}>Base Sepolia</span>
                   </div>
                   <div className="card-b">
                     <div className="calldata">
@@ -1088,7 +1132,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                         <dt>Platform Fee (2.5%)</dt>
                         <dd className="mono">{platformFee} {issue.token.symbol}</dd>
                         <dt>Review Timeout</dt>
-                        <dd className="mono">+7 days after delivery deadline</dd>
+                        <dd className="mono">7 days after the latest submission</dd>
                         <dt>Dispute Window</dt>
                         <dd className="mono">72 hours evidence window</dd>
                       </dl>
@@ -1203,7 +1247,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                       )}
 
                       {issue.status === "OPEN" && (!myApplication || myApplication.status === "WITHDRAWN") && (
-                        <form onSubmit={apply} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <form id="apply" onSubmit={apply} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           <FormField label="Cover note (optional)">
                             <textarea
                               className="inp"
@@ -1307,7 +1351,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                 <div className="panel-b">
                   <ol className="steps">
                     <li><b>24 h</b> client funding reservation</li>
-                    <li><b>+7 days</b> review window after deadline</li>
+                    <li><b>7 days</b> review window after the latest submission</li>
                     <li><b>72 h</b> dispute evidence submission</li>
                   </ol>
                 </div>

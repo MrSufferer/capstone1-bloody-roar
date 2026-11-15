@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
@@ -5,6 +6,8 @@ import { prisma } from "@bloody-roar/database";
 import { keccakUtf8, type FoldEffect, type Hex } from "@bloody-roar/shared/escrow";
 import { applyFoldEffects } from "../src/effects";
 import { captureDisputeUndo, captureResolvedUndo, undoDispute, undoResolved } from "../src/indexer/undo";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const hex = (n: number) => `0x${randomBytes(n).toString("hex")}` as Hex;
 const chainId = 731000001, contractAddress = hex(20), escrowIdHash = keccakUtf8(hex(32));
@@ -78,4 +81,6 @@ test("dispute effects follow chain events and reverse in order", async () => {
   expect((await prisma.evidenceManifest.findUniqueOrThrow({ where: { id: raiseManifest } })).onChainEventId).toBeNull();
   expect(await prisma.rulingRecord.count({ where: { escrowIdHash } })).toBe(0);
   expect(await prisma.reconciliationFinding.count({ where: { escrowIdHash } })).toBe(0);
+});
+
 });

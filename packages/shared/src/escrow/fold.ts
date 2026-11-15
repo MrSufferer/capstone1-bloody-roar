@@ -104,6 +104,7 @@ function deposited(
     deliveryDeadline: event.deliveryDeadline,
     termsHash: event.termsHash,
     deliveryHash: null,
+    submittedAt: null,
     phase: "FUNDED",
     resolutionKind: "NONE",
     settlement: null,
@@ -139,7 +140,7 @@ function escrowEvent(state: EscrowState, event: EscrowScopedEvent, meta: EventMe
       if (now > state.deliveryDeadline) reject("delivery deadline passed");
       requireNonZero(event.deliveryHash);
       return {
-        state: { ...state, deliveryHash: event.deliveryHash },
+        state: { ...state, deliveryHash: event.deliveryHash, submittedAt: now },
         effects: [
           { kind: "WORK_SUBMITTED", escrowIdHash: event.escrowIdHash, developer: event.developer, deliveryHash: event.deliveryHash },
         ],
@@ -353,10 +354,10 @@ function resolutionTerms(
       return { clientBps: MAX_BPS, decisionHash: ZERO_HASH };
 
     case "REVIEW_TIMEOUT":
-      // claimReviewTimeout: client im lặng 7 ngày sau hạn, Developer nhận tiền.
+      // claimReviewTimeout: client im lặng 7 ngày sau lần nộp gần nhất, Developer nhận tiền.
       requirePhase(state, "FUNDED");
       if (state.deliveryHash === null) reject("no delivery to review");
-      if (now < state.deliveryDeadline + REVIEW_PERIOD) reject("review window still open");
+      if (state.submittedAt === null || now < state.submittedAt + REVIEW_PERIOD) reject("review window still open");
       return { clientBps: 0, decisionHash: ZERO_HASH };
 
     case "SETTLEMENT": {

@@ -1,5 +1,8 @@
 // One import and one array entry per job. Other agents add their job here.
 import { alertsJob } from "../alerts";
+import { sourceSnapshotJob } from "./source-snapshot";
+import { testRunsJob } from "./test-runs";
+import { autoClaimJob } from "./auto-claim";
 import { cleanupJob } from "./cleanup";
 import type { Job } from "../runtime/scheduler";
 import { deadlinesJob } from "./deadlines";
@@ -9,4 +12,4 @@ import { reservationsJob } from "./reservations";
 import { reconciliationJob } from "./reconciliation";
 import { contractConfigJob } from "./contract-config";
 
-export const jobs: Job[] = [indexerJob, intentsJob, reservationsJob, deadlinesJob, reconciliationJob, alertsJob, cleanupJob, contractConfigJob];
+export const jobs: Job[] = [indexerJob, intentsJob, reservationsJob, deadlinesJob, reconciliationJob, alertsJob, cleanupJob, contractConfigJob, autoClaimJob, sourceSnapshotJob, testRunsJob];

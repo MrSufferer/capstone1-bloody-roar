@@ -1,7 +1,10 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { expect, test } from "bun:test";
 import { tryAcquireWorkerLock } from "../src/runtime/lock";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 
@@ -17,4 +20,6 @@ test("a second worker cannot take the lock until the first releases it", async (
   const again = await tryAcquireWorkerLock(url);
   expect(again).not.toBeNull();
   await again?.release();
+});
+
 });

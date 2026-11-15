@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { graphqlRequest } from "@/lib/graphql-client";
+import { useQueryClient } from "@tanstack/react-query";
 import { MarketplaceFilterBar, type FilterState } from "./filter-bar";
 import { IssueCard } from "./issue-card";
 import { TaskSkeleton } from "./task-skeleton";
@@ -54,14 +55,14 @@ type StatsResponse = {
 type DataSource = "loading" | "live";
 
 function localFilter(issues: IssueItem[], filters: FilterState) {
-  const term = filters.search.trim().toLowerCase();
+  const words = filters.search.toLowerCase().split(/\s+/).filter(Boolean);
   return issues
     .filter((issue) => !filters.category || issue.category === filters.category)
     .filter((issue) => !filters.status || issue.status === filters.status)
     .filter((issue) => filters.bountyMin == null || issue.bountyAmount >= filters.bountyMin)
     .filter((issue) => filters.bountyMax == null || issue.bountyAmount <= filters.bountyMax)
     .filter((issue) => !filters.selectedSkill || issue.requiredSkills.some((skill) => skill.toLowerCase() === filters.selectedSkill?.toLowerCase()))
-    .filter((issue) => !term || [issue.title, issue.description, ...issue.requiredSkills].some((value) => value.toLowerCase().includes(term)))
+    .filter((issue) => words.every((word) => [issue.title, issue.description, ...issue.requiredSkills].some((value) => value.toLowerCase().includes(word))))
     .sort((a, b) => {
       if (filters.sortBy === "HIGHEST_BOUNTY") return b.bountyAmount - a.bountyAmount;
       if (filters.sortBy === "MOST_VIEWED") return b.viewCount - a.viewCount;
@@ -75,6 +76,7 @@ function localFilter(issues: IssueItem[], filters: FilterState) {
 }
 
 export function MarketplaceView({ initialSearch = "", initialSkill }: { initialSearch?: string; initialSkill?: string | undefined }) {
+  const queryClient = useQueryClient();
   const { theme } = useUiPreferences();
   
   const [filters, setFilters] = useState<FilterState>({ search: initialSearch, selectedSkill: initialSkill, category: "", status: "", sortBy: "NEWEST" });
@@ -113,7 +115,8 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
     }
 
     try {
-      const result = await graphqlRequest<IssuesResponse>(ISSUES_QUERY, { ...variables, after }, signal);
+      const result = await queryClient.fetchQuery({ queryKey: ["marketplace-issues", variables, after], queryFn: ({ signal: querySignal }) => graphqlRequest<IssuesResponse>(ISSUES_QUERY, { ...variables, after }, querySignal) });
+      if (signal?.aborted) return;
       const page = result.issues;
       const rows = page.edges.map(({ node }) => ({ ...node, bountyAmount: Number(node.bountyAmount.formatted), applicationCount: node.applicationCount ?? 0 }));
       setIssues((previous) => append ? [...previous, ...rows] : rows);
@@ -129,14 +132,14 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
         setHasNextPage(false);
         setEndCursor(null);
       }
-      setRequestError(error instanceof Error ? error.message : "Không thể tải bài toán.");
+      setRequestError(error instanceof Error ? error.message : "Could not load bounties.");
     } finally {
       if (!signal?.aborted) {
         setIsLoading(false);
         setIsLoadingMore(false);
       }
     }
-  }, [variables]);
+  }, [variables, queryClient]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -149,11 +152,11 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
 
   useEffect(() => {
     const controller = new AbortController();
-    void graphqlRequest<StatsResponse>(STATS_QUERY, {}, controller.signal)
-      .then((result) => setStats(result.marketplaceStats))
-      .catch(() => setStats(null));
+    void queryClient.fetchQuery({ queryKey: ["marketplace-stats"], queryFn: ({ signal }) => graphqlRequest<StatsResponse>(STATS_QUERY, {}, signal) })
+      .then((result) => { if (!controller.signal.aborted) setStats(result.marketplaceStats); })
+      .catch(() => { if (!controller.signal.aborted) setStats(null); });
     return () => controller.abort();
-  }, []);
+  }, [queryClient]);
 
   const filteredIssues = useMemo(() => localFilter(issues, filters), [issues, filters]);
 
@@ -192,7 +195,7 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
 
               {isLoading && dataSource === "loading" && (
                 <p role="status" className="my-3 text-xs text-[var(--ink-3)]">
-                  Loading live listings from Base Sepolia...
+                  Loading bounties...
                 </p>
               )}
 
@@ -204,7 +207,7 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
                     onClick={() => void fetchPage(null, false)}
                     className="btn btn-sm btn-o"
                   >
-                    Thử lại
+                    Try again
                   </button>
                 </div>
               )}
@@ -244,7 +247,6 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
               <div className="panel">
                 <div className="panel-h">
                   <span>Bounty stats</span>
-                  <span className="mono text-xs text-[var(--ok)]">Base Sepolia</span>
                 </div>
                 <div className="panel-b">
                   <div className="flex justify-between items-center text-xs">
@@ -283,7 +285,7 @@ export function MarketplaceView({ initialSearch = "", initialSkill }: { initialS
               <div className="panel note">
                 <div className="panel-h text-[var(--gold)] font-bold">Escrow guarantee</div>
                 <div className="panel-b text-xs text-[var(--ink-2)] leading-relaxed">
-                  Each reward is locked on Base Sepolia. Payouts are checked against smart contract receipts. A full refund pays no platform fee.
+                  Each reward is locked in escrow. Payouts are checked against smart contract receipts. A full refund pays no platform fee.
                 </div>
               </div>
             </aside>

@@ -20,7 +20,7 @@ export async function execute(
   contextValue: { user: unknown; db: unknown; sessionToken?: string | null },
   variables?: Record<string, unknown>,
 ): Promise<GraphQLResult> {
-  if (!schema) throw new Error("gọi loadSchema() trong beforeAll trước");
+  if (!schema) throw new Error("call loadSchema() in beforeAll first");
   const yoga = createYoga({
     schema,
     context: () => contextValue,

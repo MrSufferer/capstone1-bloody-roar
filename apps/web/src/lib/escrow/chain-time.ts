@@ -12,6 +12,6 @@ export async function readChainTime(expectedChainId: number): Promise<Date> {
     if (!Number.isSafeInteger(time) || Number.isNaN(new Date(time).getTime())) throw new Error("Invalid block timestamp");
     return new Date(time);
   } catch {
-    throw gqlError("Không thể đọc thời gian trên chain", "ESCROW_RPC_UNAVAILABLE");
+    throw gqlError("Could not read the chain time", "ESCROW_RPC_UNAVAILABLE");
   }
 }

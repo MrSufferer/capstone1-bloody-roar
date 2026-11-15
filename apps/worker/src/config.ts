@@ -1,5 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 // Worker env (BE-60, worker part). Hand-checked instead of zod: A3 may add only pg and @types/pg.
 export type WorkerConfig = {
+  testRunnerEnabled: boolean;
+  snapshotDir: string;
   port: number;
   rpcUrl: string;
   chainId: number;
@@ -50,6 +55,8 @@ export function loadConfig(env: Env = process.env): WorkerConfig {
 
   if (errors.length > 0) throw new Error(`Invalid worker config: ${errors.join("; ")}`);
   return {
+    testRunnerEnabled: env.TEST_RUNNER_ENABLED === "true",
+    snapshotDir: path.resolve(fileURLToPath(new URL("../../../", import.meta.url)), env.SNAPSHOT_DIR?.trim() || ".data/snapshots"),
     port: integer("WORKER_PORT", 4300, 1),
     rpcUrl,
     chainId: Number(chainIdRaw),

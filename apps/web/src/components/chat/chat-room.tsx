@@ -1,22 +1,22 @@
 "use client";
 
+import { useToastState } from "@/lib/toast";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import axios from "axios";
+import { uploadFile } from "@/lib/upload";
 import { io, type Socket } from "socket.io-client";
 import { Check, CircleHelp, FileText, Paperclip, Send, ShieldCheck, X } from "lucide-react";
 import Image from "next/image";
-import { ALLOWED_FILE_TYPES, MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
+import { ALLOWED_FILE_TYPES } from "@bloody-roar/shared";
 import { graphqlRequest } from "@/lib/graphql-client";
-import { apiClient, getApiErrorMessage } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/store/use-auth-store";
 import { Button } from "@/components/ui/button";
 import type { ChatMessagePayload } from "@bloody-roar/shared";
 
 const CHAT_QUERY = `
-  query TaskMessages($issueId: String!, $after: String) {
-    messages(issueId: $issueId, first: 50, after: $after) {
+  query TaskMessages($conversationId: ID!, $after: String) {
+    messages(conversationId: $conversationId, first: 50, after: $after) {
       edges { cursor node {
-        id content type wasModified issueId senderId replyToId createdAt
+        id content type wasModified conversationId issueId senderId replyToId createdAt
         sender { name avatar }
         attachments { id fileName fileUrl fileSize fileMime }
       } }
@@ -26,6 +26,7 @@ const CHAT_QUERY = `
 `;
 
 type HistoryMessage = {
+  conversationId?: string | null;
   id: string;
   content: string;
   type: "TEXT" | "FILE" | "SYSTEM";
@@ -67,6 +68,7 @@ function toDisplayMessage(node: HistoryMessage): DisplayMessage {
     senderName: node.sender.name ?? "Member",
     ...(node.sender.avatar ? { senderAvatar: node.sender.avatar } : {}),
     issueId: node.issueId,
+    conversationId: node.conversationId ?? "",
     wasModified: node.wasModified,
     ...(node.replyToId ? { replyToId: node.replyToId } : {}),
     ...(attachment ? {
@@ -79,33 +81,6 @@ function toDisplayMessage(node: HistoryMessage): DisplayMessage {
   };
 }
 
-async function uploadFile(file: File, issueId: string) {
-  if (file.size <= 0 || file.size > MAX_FILE_SIZE_BYTES) {
-    throw new Error("Choose a non-empty file smaller than 50 MB.");
-  }
-  if (!ALLOWED_FILE_TYPES.includes(file.type as never)) {
-    throw new Error("This file type is not supported.");
-  }
-
-  // Chat files are stored as task-scoped DELIVERY uploads so only the task's client and developer can read them.
-  const { data: upload } = await apiClient.post<{ uploadUrl: string; fileUrl: string }>("/api/uploads", {
-    fileName: file.name,
-    fileType: file.type,
-    fileSize: file.size,
-    purpose: "DELIVERY",
-    issueId,
-  });
-  const isSameOrigin = new URL(upload.uploadUrl, window.location.href).origin === window.location.origin;
-  try {
-    await (isSameOrigin ? apiClient : axios).put(upload.uploadUrl, file, {
-      headers: { "Content-Type": file.type },
-      withCredentials: isSameOrigin,
-    });
-  } catch (error) {
-    throw new Error(getApiErrorMessage(error, "File upload failed."));
-  }
-  return { fileUrl: upload.fileUrl as string, fileName: file.name, fileSize: file.size, fileMime: file.type };
-}
 
 function initials(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?";
@@ -117,10 +92,12 @@ function formatMessageTime(value: string) {
 
 export function ChatRoom({
   issueId,
+  conversationId,
   issueTitle,
   readOnly = false,
 }: {
   issueId: string;
+  conversationId: string;
   issueTitle?: string;
   readOnly?: boolean;
 }) {
@@ -130,7 +107,7 @@ export function ChatRoom({
   const [content, setContent] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [, setError] = useToastState("error");
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
@@ -150,7 +127,7 @@ export function ChatRoom({
       if (!active) return;
       setConnection("joining");
       setError(null);
-      client.emit("task:join", issueId, (joinError?: string) => {
+      client.emit("conversation:join", conversationId, (joinError?: string) => {
         if (!active) return;
         if (joinError) {
           setConnection("offline");
@@ -169,19 +146,23 @@ export function ChatRoom({
       setConnection("offline");
       setError(event.message || "Chat connection failed.");
     });
+    client.on("message:modified", (message) => { if (active && message.conversationId === conversationId) setMessages((current) => mergeMessages(current, [message])); });
     client.on("message:new", (message) => {
-      if (!active || message.issueId !== issueId) return;
+      if (!active || message.conversationId !== conversationId) return;
       setMessages((current) => mergeMessages(current, [message]));
+      if (document.visibilityState === "visible") void graphqlRequest(`mutation Read($id: ID!, $message: ID!) { markConversationRead(conversationId: $id, throughMessageId: $message) }`, { id: conversationId, message: message.id }).catch(() => undefined);
     });
 
     const controller = new AbortController();
-    void graphqlRequest<HistoryResponse>(CHAT_QUERY, { issueId, after: null }, controller.signal)
+    void graphqlRequest<HistoryResponse>(CHAT_QUERY, { conversationId, after: null }, controller.signal)
       .then((response) => {
         if (!active) return;
         const history = response.messages.edges.map(({ node }) => toDisplayMessage(node));
         setMessages((current) => mergeMessages(history, current));
         setHasOlderMessages(response.messages.pageInfo.hasNextPage);
         setHistoryCursor(response.messages.pageInfo.startCursor ?? null);
+        const latest = history.at(-1);
+        if (latest) void graphqlRequest(`mutation Read($id: ID!, $message: ID!) { markConversationRead(conversationId: $id, throughMessageId: $message) }`, { id: conversationId, message: latest.id }).catch(() => undefined);
       })
       .catch((reason) => {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load chat history.");
@@ -190,10 +171,10 @@ export function ChatRoom({
     return () => {
       active = false;
       controller.abort();
-      if (client.connected) client.emit("task:leave", issueId);
+      if (client.connected) client.emit("conversation:leave", conversationId);
       client.disconnect();
     };
-  }, [issueId, user]);
+  }, [issueId, conversationId, user, setError]);
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -218,7 +199,7 @@ export function ChatRoom({
       };
     }
     try {
-      const response = await graphqlRequest<HistoryResponse>(CHAT_QUERY, { issueId, after: historyCursor });
+      const response = await graphqlRequest<HistoryResponse>(CHAT_QUERY, { conversationId, after: historyCursor });
       const older = response.messages.edges.map(({ node }) => toDisplayMessage(node));
       setMessages((current) => mergeMessages(older, current));
       setHasOlderMessages(response.messages.pageInfo.hasNextPage);
@@ -229,7 +210,7 @@ export function ChatRoom({
     } finally {
       setIsLoadingHistory(false);
     }
-  }, [historyCursor, isLoadingHistory, issueId]);
+  }, [historyCursor, isLoadingHistory, conversationId, setError]);
 
   const send = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -237,14 +218,15 @@ export function ChatRoom({
     setIsSending(true);
     setError(null);
     try {
-      const file = pendingFile ? await uploadFile(pendingFile, issueId) : null;
-      const messageContent = file ? `Shared a file: ${file.fileName}` : content.trim();
+      const file = pendingFile ? await uploadFile(pendingFile, "CHAT", issueId, conversationId) : null;
+      const messageContent = file ? `Shared a file: ${pendingFile!.name}` : content.trim();
       await new Promise<void>((resolve, reject) => {
         const timeout = window.setTimeout(() => reject(new Error("Chat server did not confirm the message. Try again.")), 15000);
         socket.emit("message:send", {
           content: messageContent,
           type: file ? "FILE" : "TEXT",
           issueId,
+          conversationId,
           clientMessageId: crypto.randomUUID(),
           ...(file ?? {}),
         }, (messageError?: string) => {
@@ -262,7 +244,7 @@ export function ChatRoom({
     } finally {
       setIsSending(false);
     }
-  }, [connection, content, issueId, isSending, pendingFile, socket, user]);
+  }, [connection, content, issueId, conversationId, isSending, pendingFile, socket, user, setError]);
 
   if (!user) return <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 text-sm text-[hsl(var(--foreground-muted))]">Connect your wallet to open task chat.</div>;
 
@@ -321,7 +303,6 @@ export function ChatRoom({
         })}
       </div>
 
-      {error && <p role="status" className="border-t border-[hsl(var(--border))] px-4 py-2.5 text-xs text-[hsl(var(--destructive))]">{error}</p>}
       {readOnly ? <p className="border-t border-[hsl(var(--border))] bg-[hsl(var(--background-secondary))] px-4 py-3 text-xs text-[hsl(var(--foreground-muted))]">Read-only now. The bounty is complete, or a dispute is under review.</p> : <>
         {pendingFile && <div className="flex items-center justify-between gap-3 border-t border-[hsl(var(--border))] px-4 py-2 text-xs text-[hsl(var(--foreground-muted))]"><span className="truncate">Attached: {pendingFile.name}</span><button type="button" onClick={() => { setPendingFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }} className="rounded p-1 hover:bg-[hsl(var(--background-secondary))]" aria-label="Remove attachment"><X className="h-3.5 w-3.5" /></button></div>}
         <form onSubmit={send} className="flex items-end gap-2 border-t border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 sm:gap-3 sm:p-4">
@@ -334,4 +315,12 @@ export function ChatRoom({
       </>}
     </section>
   );
+}
+
+
+export function IssueChatRoom({ issueId, ...props }: { issueId: string; issueTitle?: string; readOnly?: boolean }) {
+  const [id, setId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { let active = true; setId(null); setError(null); void graphqlRequest<{ workConversation: string }>(`mutation WorkRoom($issue: ID!) { workConversation(issueId: $issue) }`, { issue: issueId }).then((r) => { if (active) setId(r.workConversation); }).catch((e) => { if (active) setError(e.message); }); return () => { active = false; }; }, [issueId]);
+  return id ? <ChatRoom key={id} issueId={issueId} conversationId={id} {...props} /> : <p role={error ? "alert" : "status"}>{error ?? "Loading conversation…"}</p>;
 }

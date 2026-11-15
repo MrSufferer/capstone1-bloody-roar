@@ -4,8 +4,8 @@ import { UiPreferencesProvider, useUiPreferences } from "@/lib/ui-preferences";
 import { UiPreferenceControls } from "@/components/layout/ui-preference-controls";
 
 function PreferenceProbe() {
-  const { language, theme, t } = useUiPreferences();
-  return <p>{language}|{theme}|{t("marketplace")}</p>;
+  const { theme, t } = useUiPreferences();
+  return <p>{theme}|{t("marketplace")}</p>;
 }
 
 describe("UI preferences", () => {
@@ -17,22 +17,12 @@ describe("UI preferences", () => {
 
   afterEach(() => cleanup());
 
-  it("switches language and persists the selected value", () => {
-    render(<UiPreferencesProvider><UiPreferenceControls /><PreferenceProbe /></UiPreferencesProvider>);
-
-    fireEvent.click(screen.getByTestId("language-toggle"));
-
-    expect(screen.getByText("vi|light|Bounty")).toBeInTheDocument();
-    expect(window.localStorage.getItem("bloody-roar-language")).toBe("vi");
-    expect(document.documentElement.lang).toBe("vi");
-  });
-
   it("switches theme and applies the matching document class", () => {
     render(<UiPreferencesProvider><UiPreferenceControls /><PreferenceProbe /></UiPreferencesProvider>);
 
     fireEvent.click(screen.getByTestId("theme-toggle"));
 
-    expect(screen.getByText("en|dark|Bounties")).toBeInTheDocument();
+    expect(screen.getByText("dark|Bounties")).toBeInTheDocument();
     expect(window.localStorage.getItem("bloody-roar-theme")).toBe("dark");
     expect(document.documentElement).toHaveClass("dark");
   });

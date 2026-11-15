@@ -78,7 +78,7 @@ builder.queryFields((t) => ({
       if (!issue) return null;
       const isAdmin = user.role === "ADMIN";
       if (!isAdmin && issue.clientId !== user.id && issue.developerId !== user.id)
-        throw gqlError("Bạn không được phép xem tranh chấp này", "FORBIDDEN");
+        throw gqlError("You are not allowed to view this dispute", "FORBIDDEN");
       return ctx.db.dispute.findUnique({
         ...query,
         where: { issueId: args.issueId },
@@ -152,7 +152,7 @@ builder.mutationField("analyzeDispute", (t) =>
               requiredSkills: true,
               clientId: true,
               developerId: true,
-              messages: {
+              messages: { where: { conversation: { kind: "ISSUE_WORK" } },
                 select: { id: true, senderId: true, content: true, type: true, createdAt: true },
                 orderBy: [{ createdAt: "desc" }, { id: "desc" }],
                 take: 100,

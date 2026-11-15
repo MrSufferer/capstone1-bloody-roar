@@ -24,6 +24,7 @@
     "contracts:compile": "bun run --cwd apps/contracts compile",
     "contracts:test": "bun run --cwd apps/contracts test",
     "contracts:deploy": "bun run --cwd apps/contracts deploy:local",
+    "contracts:sync-env": "bun -e 'const m = await Bun.file(\"apps/contracts/deployments/localhost.json\").json(); let env = await Bun.file(\".env\").text(); const set = (k, v) => { const re = new RegExp(`^${k}=.*$`, \"m\"); env = re.test(env) ? env.replace(re, `${k}=${v}`) : `${env.trimEnd()}\\n${k}=${v}\\n`; }; set(\"ESCROW_ADDRESS\", `\"${m.address}\"`); set(\"ESCROW_CONTRACT_ADDRESS\", m.address); set(\"ESCROW_DEPLOY_BLOCK\", String(m.deployBlock)); await Bun.write(\".env\", env); console.log(\"Synced .env with localhost.json:\", m.address);'",
     "worker:start": "bun run --cwd apps/worker start",
     "worker:replay": "bun run --cwd apps/worker replay",
     "test:e2e:local": "bun run tests/e2e/run-local.ts"

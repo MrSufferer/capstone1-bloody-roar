@@ -1,7 +1,7 @@
 import { builder } from "../../builder";
 import { GraphQLError } from "graphql";
 import { auditHash } from "../../../ai/hash";
-import { canReadIssueChat, canWriteIssueChat } from "../../../lib/chat-access";
+import { accessibleConversation, workConversation } from "../../../lib/conversations";
 import { gqlError, parseOrThrow } from "../../errors";
 import { rateLimit } from "../../../lib/rate-limit";
 import { z } from "zod";
@@ -45,13 +45,10 @@ export const MessageRef = builder.prismaObject("Message", {
     type: t.expose("type", { type: MessageTypeEnum }),
     wasModified: t.exposeBoolean("wasModified"),
     issueId: t.exposeString("issueId"),
+    conversationId: t.exposeString("conversationId"),
     senderId: t.exposeString("senderId"),
     clientMessageId: t.exposeString("clientMessageId", { nullable: true }),
     replyToId: t.exposeString("replyToId", { nullable: true }),
-    readAt: t.string({
-      nullable: true,
-      resolve: (msg) => msg.readAt?.toISOString() ?? null,
-    }),
     editedAt: t.string({
       nullable: true,
       resolve: (msg) => msg.editedAt?.toISOString() ?? null,
@@ -140,7 +137,8 @@ builder.queryFields((t) => ({
   messages: t.field({
     type: MessageConnectionRef,
     args: {
-      issueId: t.arg.string({ required: true }),
+      issueId: t.arg.string(),
+      conversationId: t.arg.id(),
       first: t.arg.int({ required: false }),
       after: t.arg.string({ required: false }),
     },
@@ -149,20 +147,18 @@ builder.queryFields((t) => ({
         throw new GraphQLError("Unauthorized", { extensions: { code: "UNAUTHORIZED" } });
       }
 
-      const issue = await ctx.db.issue.findUnique({
-        where: { id: args.issueId },
-        select: { clientId: true, developerId: true, status: true },
-      });
-      if (!issue || !canReadIssueChat(issue, ctx.user)) {
-        throw new GraphQLError("Forbidden", { extensions: { code: "FORBIDDEN" } });
-      }
+      const conversation = args.conversationId
+        ? await accessibleConversation(ctx.db, String(args.conversationId), ctx.user)
+        : args.issueId ? await ctx.db.$transaction((tx) => workConversation(tx, args.issueId!, ctx.user!)) : null;
+      if (!conversation) throw gqlError("conversationId is required", "BAD_USER_INPUT");
+      const conversationId = conversation.id;
 
       const q = parseOrThrow(MessagesQuerySchema, { first: args.first, after: args.after });
       const take = q.first ?? 50;
       const cursorId = q.after ? decodeCursor(q.after) : null;
       if (cursorId) {
         const cursorMessage = await ctx.db.message.findFirst({
-          where: { id: cursorId, issueId: args.issueId, isDeleted: false },
+          where: { id: cursorId, conversationId, isDeleted: false },
           select: { id: true },
         });
         if (!cursorMessage)
@@ -172,7 +168,7 @@ builder.queryFields((t) => ({
       }
 
       const rows = await ctx.db.message.findMany({
-        where: { issueId: args.issueId, isDeleted: false },
+        where: { conversationId, isDeleted: false },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: take + 1,
         ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
@@ -181,21 +177,6 @@ builder.queryFields((t) => ({
 
       const hasNextPage = rows.length > take;
       const messages = (hasNextPage ? rows.slice(0, take) : rows).reverse();
-
-      const unreadIds = messages
-        .filter((message) => message.senderId !== ctx.user?.id && !message.readAt)
-        .map((message) => message.id);
-      if (unreadIds.length) {
-        const now = new Date();
-        await ctx.db.message.updateMany({
-          where: { id: { in: unreadIds }, issueId: args.issueId, readAt: null },
-          data: { readAt: now },
-        });
-        const unread = new Set(unreadIds);
-        messages.forEach((message) => {
-          if (unread.has(message.id)) message.readAt = now;
-        });
-      }
 
       const firstItem = messages[0];
       const lastItem = messages[messages.length - 1];
@@ -219,24 +200,36 @@ builder.queryFields((t) => ({
 const EditMessageSchema = z.object({ content: z.string().trim().min(1).max(4000) });
 
 // Edits and deletes belong to the sender while the task is open. Once a dispute opens, messages are evidence and stay fixed.
-async function findOwnWritableMessage(ctx: GraphQLContext, id: string) {
+async function findOwnWritableMessage(ctx: GraphQLContext, id: string, db: Prisma.TransactionClient = ctx.db) {
   const user = ctx.user;
   if (!user) throw new GraphQLError("Unauthorized", { extensions: { code: "UNAUTHORIZED" } });
-  const message = await ctx.db.message.findUnique({
+  const message = await db.message.findUnique({
     where: { id },
     include: { ...MESSAGE_INCLUDE, issue: { select: { clientId: true, developerId: true, status: true } } },
   });
   if (!message || message.isDeleted) throw new GraphQLError("Message not found", { extensions: { code: "NOT_FOUND" } });
   if (message.senderId !== user.id) throw new GraphQLError("Only the sender can change this message", { extensions: { code: "FORBIDDEN" } });
-  if (!canWriteIssueChat(message.issue, user)) throw new GraphQLError("Chat is closed for this task", { extensions: { code: "FORBIDDEN" } });
+  if (!message.conversationId) throw gqlError("Message has not been migrated", "NOT_FOUND");
+  await accessibleConversation(db, message.conversationId, user, true);
+  if (!message.issue) throw new GraphQLError("Chat is closed for this task", { extensions: { code: "FORBIDDEN" } });
   if (message.issue.status === "DISPUTED") throw new GraphQLError("Messages are locked during a dispute", { extensions: { code: "CHAT_LOCKED" } });
   return message;
+}
+
+async function updateOwnWritableMessage(ctx: GraphQLContext, id: string, data: Prisma.MessageUpdateInput) {
+  return ctx.db.$transaction(async (tx) => {
+    // A dispute or application closure must not overtake the AI guard's permission check.
+    await tx.$queryRaw`SELECT i.id FROM issues i JOIN messages m ON m."issueId" = i.id WHERE m.id = ${id} FOR UPDATE OF i`;
+    await tx.$queryRaw`SELECT a.id FROM applications a JOIN conversations c ON c."applicationId" = a.id JOIN messages m ON m."conversationId" = c.id WHERE m.id = ${id} FOR SHARE OF a`;
+    await findOwnWritableMessage(ctx, id, tx);
+    return tx.message.update({ where: { id }, data, include: MESSAGE_INCLUDE });
+  });
 }
 
 // Live clients refresh the message; a deleted one arrives with empty content.
 function broadcastModified(message: MessageNode) {
   try {
-    getSocketIO().to(`task:${message.issueId}`).emit("message:modified", toMessagePayload(message, message.sender));
+    getSocketIO().to(`conv:${message.conversationId}`).emit("message:modified", toMessagePayload(message, message.sender));
   } catch {
     /* Socket server may not be available in isolated tests. */
   }
@@ -252,18 +245,14 @@ builder.mutationFields((t) => ({
     resolve: async (_root, args, ctx) => {
       const message = await findOwnWritableMessage(ctx, String(args.id));
       const limit = rateLimit(`chat:${message.senderId}`, { limit: 10, windowMs: 10_000 });
-      if (!limit.ok) throw gqlError("Gửi quá nhanh, thử lại sau", "RATE_LIMITED");
+      if (!limit.ok) throw gqlError("Sending too fast, try again later", "RATE_LIMITED");
       const { content } = parseOrThrow(EditMessageSchema, { content: args.content });
       const guard = await guardMessage(content, { issueId: message.issueId });
-      const updated = await ctx.db.message.update({
-        where: { id: message.id },
-        data: {
+      const updated = await updateOwnWritableMessage(ctx, message.id, {
           content: guard.content,
           wasModified: guard.wasModified,
           originalHash: guard.wasModified ? auditHash(content) : null,
           editedAt: new Date(),
-        },
-        include: MESSAGE_INCLUDE,
       });
       broadcastModified(updated);
       return updated;
@@ -273,11 +262,7 @@ builder.mutationFields((t) => ({
     args: { id: t.arg.id({ required: true }) },
     resolve: async (_root, args, ctx) => {
       const message = await findOwnWritableMessage(ctx, String(args.id));
-      const updated = await ctx.db.message.update({
-        where: { id: message.id },
-        data: { isDeleted: true, deletedAt: new Date(), content: "", wasModified: false, originalHash: null },
-        include: MESSAGE_INCLUDE,
-      });
+      const updated = await updateOwnWritableMessage(ctx, message.id, { isDeleted: true, deletedAt: new Date(), content: "", wasModified: false, originalHash: null });
       broadcastModified(updated);
       return true;
     },
@@ -290,16 +275,10 @@ builder.queryField("unreadMessageCount", (t) =>
     resolve: async (_root, args, ctx) => {
       const user = ctx.user;
       if (!user) throw new GraphQLError("Unauthorized", { extensions: { code: "UNAUTHORIZED" } });
-      const issue = await ctx.db.issue.findUnique({
-        where: { id: args.issueId },
-        select: { clientId: true, developerId: true, status: true },
-      });
-      if (!issue || !canReadIssueChat(issue, user)) {
-        throw new GraphQLError("Forbidden", { extensions: { code: "FORBIDDEN" } });
-      }
-      return ctx.db.message.count({
-        where: { issueId: args.issueId, isDeleted: false, readAt: null, senderId: { not: user.id } },
-      });
+      const room = await ctx.db.$transaction((tx) => workConversation(tx, args.issueId, user));
+      const member = room.participants.find((p) => p.userId === user.id);
+      if (!member) return 0;
+      return ctx.db.message.count({ where: { conversationId: room.id, isDeleted: false, senderId: { not: user.id }, ...(member.lastReadAt ? { createdAt: { gt: member.lastReadAt } } : {}) } });
     },
   }),
 );

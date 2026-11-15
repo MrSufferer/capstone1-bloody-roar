@@ -10,13 +10,13 @@ const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)
 export async function walletSigner(expected: string): Promise<ethers.providers.JsonRpcSigner> {
   await ensureActiveChain();
   const ethereum = (globalThis as unknown as { ethereum?: ethers.providers.ExternalProvider }).ethereum;
-  if (!ethereum) throw new Error("Ví Web3 chưa sẵn sàng.");
+  if (!ethereum) throw new Error("The Web3 wallet is not ready.");
   const provider = new ethers.providers.Web3Provider(ethereum);
   await provider.send("eth_requestAccounts", []);
   const signer = provider.getSigner();
   const actual = await signer.getAddress();
   if (actual.toLowerCase() !== expected.toLowerCase()) {
-    throw new Error(`Ví đang chọn tài khoản ${short(actual)}, khác tài khoản đăng nhập ${short(expected)}. Đổi tài khoản trong ví rồi thử lại.`);
+    throw new Error(`Your wallet has ${short(actual)} selected, not the signed-in account ${short(expected)}. Switch accounts in the wallet and try again.`);
   }
   return signer;
 }
@@ -29,7 +29,7 @@ export async function sendPreparedCalls(calls: PreparedCall[], record: (intentId
     const tx = await signer.sendTransaction({ to: call.contractAddress, data: call.data, value: ethers.BigNumber.from(call.value) });
     await record(call.intentId, tx.hash);
     const receipt = await tx.wait(1);
-    if (receipt.status !== 1) throw new Error("Giao dịch không thành công trên chain.");
+    if (receipt.status !== 1) throw new Error("The transaction failed on-chain.");
     hashes.push(tx.hash);
   }
   return hashes;

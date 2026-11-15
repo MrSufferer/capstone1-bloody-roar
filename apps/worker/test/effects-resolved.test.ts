@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
@@ -5,6 +6,8 @@ import { prisma } from "@bloody-roar/database";
 import { keccakUtf8, type FoldEffect, type Hex } from "@bloody-roar/shared/escrow";
 import { applyFoldEffects } from "../src/effects";
 import { captureResolvedUndo, undoResolved } from "../src/indexer/undo";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const address = () => `0x${randomBytes(20).toString("hex")}` as Hex;
 const chainId = 730000001, contractAddress = address();
@@ -94,4 +97,6 @@ test("a release counts toward the developer's completed tasks, and undo takes it
 
   await prisma.$transaction((tx) => undoResolved(tx, meta.chainEventId, undo, chainId, contractAddress));
   expect((await prisma.user.findUniqueOrThrow({ where: { id: developer.id } })).completedTaskCount).toBe(before.completedTaskCount);
+});
+
 });

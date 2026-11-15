@@ -1,5 +1,6 @@
 "use client";
 
+import { useToastState } from "@/lib/toast";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -13,7 +14,7 @@ import { AuthRequiredPanel } from "@/components/auth/auth-required-panel";
 import { useUiPreferences } from "@/lib/ui-preferences";
 import { sendPreparedCalls, type PreparedCall } from "@/lib/web3/send-prepared";
 
-const CLAIMABLE_QUERY = `query MyClaimable { myClaimable { chainId contractAddress address amountRaw } }`;
+const CLAIMABLE_QUERY = `query MyClaimable { myClaimable { chainId contractAddress address amountRaw autoClaimPending } }`;
 const PREPARE_CLAIM = `mutation PrepareClaim($recipient: String!) { prepareClaim(recipient: $recipient) { intentId method contractAddress data value } }`;
 const RECORD_TX = `mutation RecordTx($id: ID!, $hash: String!) { recordTransactionSubmitted(intentId: $id, txHash: $hash) { id } }`;
 
@@ -50,13 +51,14 @@ export function DashboardView() {
   const [tab, setTab] = useState<Tab>(queryTab === "bounties" ? "posted" : "all");
   useEffect(() => { setTab(queryTab === "bounties" ? "posted" : "all"); }, [queryTab]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [, setError] = useToastState("error");
+  const [autoClaimPending, setAutoClaimPending] = useState(false);
   const [claimable, setClaimable] = useState<string>("0");
   const [claiming, setClaiming] = useState(false);
-  const [claimNotice, setClaimNotice] = useState<string | null>(null);
+  const [, setClaimNotice] = useToastState("success");
 
-  const loadClaimable = () => graphqlRequest<{ myClaimable: Array<{ amountRaw: string }> }>(CLAIMABLE_QUERY)
-    .then((result) => setClaimable(result.myClaimable.reduce((sum, row) => sum + BigInt(row.amountRaw), 0n).toString()))
+  const loadClaimable = () => graphqlRequest<{ myClaimable: Array<{ amountRaw: string; autoClaimPending: boolean }> }>(CLAIMABLE_QUERY)
+    .then((result) => { setAutoClaimPending(result.myClaimable.some((row) => row.autoClaimPending)); setClaimable(result.myClaimable.reduce((sum, row) => sum + BigInt(row.amountRaw), 0n).toString()); })
     .catch(() => undefined);
 
   useEffect(() => {
@@ -91,7 +93,7 @@ export function DashboardView() {
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load your dashboard."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [user]);
+  }, [user, setError]);
 
   const tasks = useMemo(() => (data?.myIssues ?? []).filter((task) => {
     if (tab === "posted") return task.clientId === user?.id;
@@ -109,8 +111,8 @@ export function DashboardView() {
         {BigInt(claimable) > 0n && (
           <section className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[hsl(var(--border))] p-4">
             <p className="text-sm">Available to withdraw: <strong>{formatRaw(claimable)} USDC</strong></p>
-            <Button className="btn btn-p" disabled={claiming} onClick={() => void claimFunds()}>Rút tiền</Button>
-            {claimNotice && <p role="status" className="w-full text-xs text-[hsl(var(--success))]">{claimNotice}</p>}
+            {autoClaimPending && <p className="text-sm">Đang tự chuyển về ví của bạn…</p>}
+            <Button className="btn btn-p" disabled={claiming} onClick={() => void claimFunds()}>Withdraw funds</Button>
           </section>
         )}
         </div>
@@ -126,7 +128,6 @@ export function DashboardView() {
         <StatCard label="Paid escrows" value={data.userStats.completedPayouts} icon={<CircleDollarSign className="h-4 w-4" />} />
       </section>}
 
-      {error && <div role="alert" className="mt-5 rounded-lg border border-[hsl(var(--destructive)/0.35)] bg-[hsl(var(--destructive)/0.08)] p-3 text-sm text-[hsl(var(--destructive))]">{error}</div>}
       <section className="mt-7 overflow-hidden rounded-xl glass animate-fade-in">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[hsl(var(--border))] px-4 py-4 sm:px-6">
           <div><h2 className="font-semibold">Work and applications</h2><p className="text-xs text-[hsl(var(--foreground-muted))]">Updates are saved to your Bloody-Roar workspace.</p></div>

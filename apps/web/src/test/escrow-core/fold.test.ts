@@ -453,8 +453,8 @@ describe("EscrowResolved", () => {
     ).toThrow(/delivery was submitted/);
   });
 
-  it("REVIEW_TIMEOUT: only after the deadline plus 7 days, and only with a delivery", () => {
-    const reviewEnd = DEADLINE + 7n * DAY;
+  it("REVIEW_TIMEOUT: only after the latest submission plus 7 days, and only with a delivery", () => {
+    const reviewEnd = T0 + 8n * DAY;
     const amounts = [0n, 975_000_000n, 25_000_000n] as const;
     expect(() =>
       play([[deposit(), T0], [work(), T0 + DAY], [resolved("REVIEW_TIMEOUT", ...amounts), reviewEnd - 1n]]),

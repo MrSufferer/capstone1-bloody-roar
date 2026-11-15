@@ -7,7 +7,7 @@ describe("TokenAmount helpers", () => {
   });
 
   it("rejects malformed amounts with a GraphQL error", () => {
-    expect(() => parseTokenAmountInput("12.3.4", { decimals: 6 })).toThrow("Số tiền không hợp lệ");
+    expect(() => parseTokenAmountInput("12.3.4", { decimals: 6 })).toThrow("Invalid amount");
   });
 
   it("builds the output shape with a formatted value", () => {

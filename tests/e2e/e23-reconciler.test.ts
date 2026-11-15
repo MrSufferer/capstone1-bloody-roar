@@ -13,7 +13,7 @@ test("E23: the reconciler opens a finding for a projection mismatch and closes i
   await fund(f);
   const projection = await f.prisma.escrowProjection.findUniqueOrThrow({ where: { issueId: f.issueId } });
   const config = { chainId: 31337, escrowAddress: process.env.ESCROW_ADDRESS!.toLowerCase(), escrowDeployBlock: BigInt(process.env.ESCROW_DEPLOY_BLOCK!), rangeSize: 2000, reorgWindow: 64, finality: "latest" as const };
-  const rpc = createRpcClient({ url: "http://127.0.0.1:8545" });
+  const rpc = createRpcClient({ url: process.env.RPC_URL || "http://127.0.0.1:8545" });
   // Runs the reconciliation job directly; it returns null while the indexer has not reached the chain head.
   const reconcile = () => reconcileProjections({ db: f.prisma, rpc, config, now: () => new Date() });
   const openFindings = () => f.prisma.reconciliationFinding.count({ where: { escrowIdHash: projection.escrowIdHash, resolvedAt: null } });

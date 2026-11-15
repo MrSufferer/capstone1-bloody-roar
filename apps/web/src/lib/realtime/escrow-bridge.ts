@@ -7,7 +7,7 @@ import { createLogger } from "../logger";
 const log = createLogger("escrow-bridge");
 const RECONNECT_MS = 5_000;
 
-export function routeNotification(io: Server, channel: string, rawPayload: string): void {
+export function routeNotification(io: Server, channel: string, rawPayload: string, notify?: (userId: string) => void): void {
   const payload = JSON.parse(rawPayload) as Record<string, unknown>;
   if (channel === PROJECTION_CHANGED_CHANNEL && typeof payload.issueId === "string") {
     io.to(`task:${payload.issueId}`).emit("escrow:invalidate", {
@@ -16,11 +16,12 @@ export function routeNotification(io: Server, channel: string, rawPayload: strin
     });
   } else if (channel === NOTIFICATION_CREATED_CHANNEL && typeof payload.userId === "string") {
     io.to(`user:${payload.userId}`).emit("notification:new", { id: payload.id });
+    notify?.(payload.userId);
   }
 }
 
 // LISTEN needs a session, so it uses DIRECT_URL. A transaction-pooled URL drops LISTEN.
-export function startEscrowBridge(io: Server): void {
+export function startEscrowBridge(io: Server, notify?: (userId: string) => void): void {
   const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
   if (!connectionString) {
     log.warn("no DIRECT_URL or DATABASE_URL; realtime escrow events are off");
@@ -41,7 +42,7 @@ export function startEscrowBridge(io: Server): void {
     client.on("error", retry);
     client.on("notification", (msg) => {
       try {
-        routeNotification(io, msg.channel, msg.payload ?? "{}");
+        routeNotification(io, msg.channel, msg.payload ?? "{}", notify);
       } catch (err) {
         log.error({ err, channel: msg.channel }, "bad escrow notification payload");
       }
@@ -50,6 +51,7 @@ export function startEscrowBridge(io: Server): void {
       .connect()
       .then(() => client.query(`LISTEN ${PROJECTION_CHANGED_CHANNEL}`))
       .then(() => client.query(`LISTEN ${NOTIFICATION_CREATED_CHANNEL}`))
+      .then(() => notify?.("*"))
       .catch(retry);
   };
 

@@ -37,6 +37,8 @@ function issueRow(overrides: Record<string, unknown> = {}) {
 const criteria = [
   {
     id: "tc-1",
+    testCode: null as string | null,
+    testFilePath: null as string | null,
     given: "the client approves the work",
     when: "the developer releases funds",
     then: "the developer receives the payout",
@@ -59,6 +61,8 @@ function fakeDb(
   options: { issue?: Record<string, unknown>; criteria?: typeof criteria } = {},
 ) {
   const tx = {
+    conversation: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "room-1" }) },
+    conversationParticipant: { deleteMany: vi.fn(), upsert: vi.fn() },
     issue: {
       findUnique: vi.fn().mockResolvedValue(issueRow(options.issue)),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -388,4 +392,14 @@ describe("the direct-assignment mutation is removed (BE-23)", () => {
 
     expect(result.errors?.[0]?.message).toMatch(new RegExp(`Cannot query field "${removed}"`));
   });
+});
+
+it("binds executable code into the reservation hash without changing the terms format", async () => {
+  const selectWithCode = async (code: string) => {
+    const database = fakeDb({ criteria: [{ ...criteria[0]!, testFilePath: "__bloodyroar__/fix.test.ts", testCode: code }] });
+    const result = await execute(SELECT, { user: client, db: database }, selectVariables());
+    expect(result.errors).toBeUndefined();
+    return (result.data?.selectDeveloper as { termsHash: string }).termsHash;
+  };
+  expect(await selectWithCode("expect(sum(2,3)).toBe(5)")).not.toBe(await selectWithCode("expect(sum(2,3)).toBe(6)"));
 });

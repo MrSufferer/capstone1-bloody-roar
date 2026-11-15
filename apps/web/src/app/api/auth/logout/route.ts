@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@bloody-roar/database";
-import { AUTH_COOKIE_NAME, tokenFromRequest, verifyJWT } from "@/lib/auth";
+import { AUTH_COOKIE_NAME, clearAuthCache, tokenFromRequest, verifyJWT } from "@/lib/auth";
 import { disconnectUserSockets } from "@/socket/handlers";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,7 @@ export async function POST(request: Request) {
       where: { refreshHash, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    clearAuthCache();
     if (user) {
       try {
         disconnectUserSockets(user.id);

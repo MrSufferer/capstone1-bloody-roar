@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
@@ -5,6 +6,8 @@ import { prisma } from "@bloody-roar/database";
 import type { FoldEffect, Hex } from "@bloody-roar/shared/escrow";
 import { applyFoldEffects } from "../src/effects";
 import { captureClaimedUndo, undoClaimed } from "../src/indexer/undo";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 const hex = (bytes: number) => `0x${randomBytes(bytes).toString("hex")}` as Hex;
 const chainId = 760000001, contractAddress = hex(20), txHash = hex(32), eventId = `claim-${randomBytes(8).toString("hex")}`;
 let user: Awaited<ReturnType<typeof prisma.user.create>>, intentId = "";
@@ -39,4 +42,6 @@ test("refuses a claim whose amount does not match the indexed balance", async ()
   const effect: FoldEffect = { kind: "CLAIMED", recipient: user.walletAddress as Hex, caller: hex(20), amount: 1n };
   await expect(prisma.$transaction((tx) => applyFoldEffects(tx, [effect], meta))).rejects.toThrow("does not match indexed claimable balance");
   expect((await prisma.claimableBalance.findUniqueOrThrow({ where: { chainId_contractAddress_address: { chainId, contractAddress, address: user.walletAddress } } })).amountRaw.toFixed()).toBe("97500000");
+});
+
 });

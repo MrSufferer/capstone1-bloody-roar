@@ -44,7 +44,7 @@ describe("admin role changes (BE-66a)", () => {
     const { db } = fakeDb({ id: "admin-1", role: "ADMIN" });
 
     await expect(callMutation("setUserRole", { userId: "admin-1", role: "CLIENT" }, admin, db)).rejects.toThrow(
-      "Không thể tự hạ quyền quản trị viên",
+      "You cannot remove your own admin role",
     );
     expect(db.$transaction).not.toHaveBeenCalled();
   });

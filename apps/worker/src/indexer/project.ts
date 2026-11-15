@@ -26,7 +26,7 @@ export function projectionFields(next: EscrowState, lastProjectedBlock: bigint, 
   return {
     client: next.client, developer: next.developer, arbiter: next.arbiter, feeRecipient: next.feeRecipient,
     amountRaw: next.amount.toString(), depositedAt: date(next.depositedAt), deliveryDeadline: date(next.deliveryDeadline),
-    reviewDeadline: new Date(date(next.deliveryDeadline).getTime() + ESCROW_CONSTANTS.REVIEW_DAYS * dayMs),
+    reviewDeadline: new Date(date(next.submittedAt ?? next.deliveryDeadline).getTime() + ESCROW_CONSTANTS.REVIEW_DAYS * dayMs),
     termsHash: next.termsHash, deliveryHash: next.deliveryHash, phase: next.phase, resolutionKind: next.resolutionKind,
     settlementProposer: next.settlement?.proposer ?? null, settlementClientBps: next.settlement?.clientBps ?? null,
     disputeRaisedBy: next.dispute?.raisedBy ?? null, disputeRaisedAt: next.dispute ? date(next.dispute.raisedAt) : null,

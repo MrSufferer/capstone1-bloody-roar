@@ -86,7 +86,27 @@ export async function verifyJWT(token: string) {
 }
 
 // Session restoration must distinguish an unavailable database from an invalid token.
-export async function verifySessionJWT(token: string) {
+// A page load fires several requests with the same token; share one lookup for a moment.
+// shortcut: per-process cache, cleared on logout and every GraphQL mutation; use Redis if scaled out.
+const AUTH_CACHE_MS = 2000;
+const authCache = new Map<string, { at: number; result: ReturnType<typeof loadSession> }>();
+
+export function clearAuthCache() {
+  authCache.clear();
+}
+
+export function verifySessionJWT(token: string) {
+  const hit = authCache.get(token);
+  if (hit && Date.now() - hit.at < AUTH_CACHE_MS) return hit.result;
+  const result = loadSession(token);
+  authCache.set(token, { at: Date.now(), result });
+  result.catch(() => authCache.delete(token));
+  // Forget the entry once it expires, so random tokens cannot grow the map.
+  setTimeout(() => authCache.delete(token), AUTH_CACHE_MS).unref();
+  return result;
+}
+
+async function loadSession(token: string) {
   const auth = thirdwebAuth();
   let authUser: Awaited<ReturnType<typeof auth.authenticate>>;
   try {
@@ -96,19 +116,16 @@ export async function verifySessionJWT(token: string) {
   }
   if (!authUser?.address) return null;
 
-  // Check if session is revoked via refreshHash
+  // Check if session is revoked via refreshHash; one joined query instead of two round trips.
   const refreshHash = crypto.createHash("sha256").update(token).digest("hex");
   const session = await prisma.session.findUnique({
     where: { refreshHash },
-    select: { userId: true, revokedAt: true, expiresAt: true },
+    include: { user: true },
   });
 
   if (!session || session.revokedAt || session.expiresAt <= new Date()) return null;
 
-  const user = await prisma.user.findUnique({
-    where: { walletAddress: authUser.address.toLowerCase() },
-  });
-
-  if (!user || user.id !== session.userId || user.isBanned) return null;
+  const user = session.user;
+  if (user.walletAddress !== authUser.address.toLowerCase() || user.isBanned) return null;
   return user;
 }

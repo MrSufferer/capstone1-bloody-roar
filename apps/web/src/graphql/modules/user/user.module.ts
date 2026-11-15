@@ -33,6 +33,9 @@ export const UserRef = builder.prismaObject("User", {
     avatar: t.exposeString("avatar", { nullable: true }),
     isGithubVerified: t.exposeBoolean("isGithubVerified"),
     githubUsername: t.exposeString("githubUsername", { nullable: true }),
+    githubUrl: t.exposeString("githubUrl", { nullable: true }),
+    linkedinUrl: t.exposeString("linkedinUrl", { nullable: true }),
+    portfolioUrl: t.exposeString("portfolioUrl", { nullable: true }),
     bio: t.exposeString("bio", { nullable: true }),
     skills: t.exposeStringList("skills"),
     location: t.exposeString("location", { nullable: true }),
@@ -75,6 +78,34 @@ builder.queryField("user", (t) =>
   })
 );
 
+// Public people search: matches name, GitHub handle, location or a skill. Email and wallet are never searched.
+builder.queryField("searchUsers", (t) =>
+  t.prismaField({
+    type: ["User"],
+    args: { query: t.arg.string({ required: true }), first: t.arg.int({ required: false }) },
+    resolve: async (query, _root, args, ctx) => {
+      const q = args.query.trim().slice(0, 60);
+      if (q.length < 2) return [];
+      const skillHits = await ctx.db.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM users WHERE "isBanned" = false AND EXISTS (
+          SELECT 1 FROM unnest(skills) AS skill WHERE strpos(lower(skill), ${q.toLowerCase()}) > 0
+        ) LIMIT 50
+      `;
+      return ctx.db.user.findMany({
+        ...query,
+        where: { isBanned: false, OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { githubUsername: { contains: q, mode: "insensitive" } },
+          { location: { contains: q, mode: "insensitive" } },
+          { id: { in: skillHits.map((row) => row.id) } },
+        ] },
+        orderBy: [{ reputationScore: "desc" }, { completedTaskCount: "desc" }, { id: "asc" }],
+        take: Math.min(Math.max(args.first ?? 4, 1), 10),
+      });
+    },
+  })
+);
+
 builder.mutationField("unlinkGithub", (t) =>
   t.prismaField({
     type: "User",
@@ -100,6 +131,9 @@ builder.mutationField("updateProfile", (t) =>
         avatar: t.input.string({ required: false }),
         skills: t.input.stringList({ required: false }),
         location: t.input.string({ required: false }),
+        githubUrl: t.input.string({ required: false }),
+        linkedinUrl: t.input.string({ required: false }),
+        portfolioUrl: t.input.string({ required: false }),
         role: t.input.string({ required: false }),
     },
     resolve: async (query, _root, args, ctx) => {
@@ -125,12 +159,15 @@ builder.mutationField("updateProfile", (t) =>
             ...(validated.avatar !== undefined && { avatar: validated.avatar }),
             ...(validated.skills !== undefined && { skills: validated.skills }),
             ...(validated.location !== undefined && { location: validated.location }),
+            ...(validated.githubUrl !== undefined && { githubUrl: validated.githubUrl }),
+            ...(validated.linkedinUrl !== undefined && { linkedinUrl: validated.linkedinUrl }),
+            ...(validated.portfolioUrl !== undefined && { portfolioUrl: validated.portfolioUrl }),
             ...(validated.role !== undefined && { role: validated.role }),
           },
         });
       } catch (error) {
         if (isEmailConflict(error)) {
-          throw gqlError("Email này đã được sử dụng", "CONFLICT");
+          throw gqlError("This email is already in use", "CONFLICT");
         }
         throw error;
       }
@@ -185,7 +222,7 @@ builder.mutationFields((t) => ({
         where: { id: String(args.id), userId: user.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
-      if (result.count === 0) throw gqlError("Phiên không tồn tại", "NOT_FOUND");
+      if (result.count === 0) throw gqlError("Session not found", "NOT_FOUND");
       return true;
     },
   }),

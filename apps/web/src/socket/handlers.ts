@@ -6,26 +6,12 @@
 // =============================================================================
 
 import type { Server } from "socket.io";
-import { HeadObjectCommand } from "@aws-sdk/client-s3";
-import { stat } from "node:fs/promises";
-import type {
-  ServerToClientEvents,
-  ClientToServerEvents,
-  ChatMessagePayload,
-} from "@bloody-roar/shared";
+import type { ServerToClientEvents, ClientToServerEvents, ChatMessagePayload } from "@bloody-roar/shared";
+import { prisma, type Prisma } from "@bloody-roar/database";
 import { createLogger } from "../lib/logger";
 import { tokenFromCookieHeader, verifyJWT } from "../lib/auth";
-import { rateLimit } from "../lib/rate-limit";
-import { prisma } from "@bloody-roar/database";
-import { canReadIssueChat, canWriteIssueChat } from "../lib/chat-access";
-import { z } from "zod";
-import { auditHash } from "../ai/hash";
-import { AILogStatus, NotificationType, Prisma } from "@bloody-roar/database";
-import { guardMessage } from "../ai/guard/service";
-import { scanAndMask } from "../ai/guard/scanner";
-import { emitNotification } from "../lib/services/notifications";
-import { ALLOWED_FILE_TYPES, MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
-import { getS3Storage, localUploadPath } from "../lib/storage";
+import { accessibleConversation, workConversation } from "../lib/conversations";
+import { saveConversationMessage, enforceMessageRate } from "../lib/chat-messages";
 
 const log = createLogger("socket.io");
 type StoredMessage = Prisma.MessageGetPayload<{
@@ -45,6 +31,7 @@ export function toMessagePayload(
     senderName: sender.name || "Anonymous",
     ...(sender.avatar ? { senderAvatar: sender.avatar } : {}),
     issueId: message.issueId,
+    conversationId: message.conversationId ?? "",
     wasModified: message.wasModified,
     ...(attachment?.fileUrl ? { fileUrl: attachment.fileUrl } : {}),
     ...(attachment?.fileName ? { fileName: attachment.fileName } : {}),
@@ -94,38 +81,27 @@ export function registerSocketHandlers(
     // -------------------------------------------------------------------
     // Room Management — join/leave task chat rooms
     // -------------------------------------------------------------------
-    socket.on("task:join", async (issueId: string, callback) => {
+    socket.on("conversation:join", async (conversationId, callback) => {
       try {
-        const user = socket.data.user;
+        const user = await verifyJWT(socket.data.token);
         if (!user) return callback?.("Unauthorized");
-
-        const issue = await prisma.issue.findUnique({
-          where: { id: issueId },
-          select: { clientId: true, developerId: true, status: true },
-        });
-        if (!issue || !canReadIssueChat(issue, user))
-          return callback?.("You cannot access this task room");
-
-        const roomName = `task:${issueId}`;
-        await socket.join(roomName);
-        log.debug({ socketId: socket.id, roomName }, "Joined task room");
-        callback?.();
-      } catch (error) {
-        log.error({ error, socketId: socket.id, issueId }, "Failed to join task room");
-        callback?.("Could not join task room");
-      }
+        await accessibleConversation(prisma, conversationId, user);
+        await socket.join(`conv:${conversationId}`); callback?.();
+      } catch { callback?.("You cannot access this conversation"); }
     });
-
-    socket.on("task:leave", async (issueId: string, callback) => {
+    socket.on("conversation:leave", async (conversationId, callback) => { await socket.leave(`conv:${conversationId}`); callback?.(); });
+    socket.on("task:join", async (issueId, callback) => {
       try {
-        const roomName = `task:${issueId}`;
-        await socket.leave(roomName);
-        log.debug({ socketId: socket.id, roomName }, "Left task room");
-        callback?.();
-      } catch (error) {
-        log.error({ error, socketId: socket.id, issueId }, "Failed to leave task room");
-        callback?.("Could not leave task room");
-      }
+        const user = await verifyJWT(socket.data.token);
+        if (!user) return callback?.("Unauthorized");
+        const room = await prisma.$transaction((tx) => workConversation(tx, issueId, user));
+        await socket.join(`conv:${room.id}`); await socket.join(`task:${issueId}`); callback?.();
+      } catch { callback?.("You cannot access this task room"); }
+    });
+    socket.on("task:leave", async (issueId, callback) => {
+      const room = await prisma.conversation.findFirst({ where: { issueId, kind: "ISSUE_WORK" } });
+      if (room) await socket.leave(`conv:${room.id}`);
+      await socket.leave(`task:${issueId}`); callback?.();
     });
 
     // -------------------------------------------------------------------
@@ -134,288 +110,20 @@ export function registerSocketHandlers(
     // -------------------------------------------------------------------
     socket.on("message:send", async (data, callback) => {
       try {
-        log.debug({ issueId: data.issueId, type: data.type }, "Incoming message");
-
-        // Re-check the session on every send: the handshake check misses later logout or ban.
         const user = await verifyJWT(socket.data.token);
-        if (!user) {
-          socket.disconnect(true);
-          return callback?.("Unauthorized");
-        }
-
-        const limit = rateLimit(`chat:${user.id}`, { limit: 10, windowMs: 10_000 });
-        if (!limit.ok) return callback?.("Too many messages, slow down");
-
-        const parsed = z
-          .object({
-            content: z.string().min(1).max(4000),
-            type: z.enum(["TEXT", "FILE"]),
-            issueId: z.string().min(1),
-            clientMessageId: z.string().optional(),
-            replyToId: z.string().optional(),
-            fileUrl: z.string().optional(),
-            fileName: z.string().optional(),
-            fileSize: z.number().optional(),
-            fileMime: z.string().optional(),
-          })
-          .safeParse(data);
-
-        if (!parsed.success) {
-          return callback?.("Invalid message format");
-        }
-
-        const {
-          content,
-          type,
-          issueId,
-          clientMessageId,
-          replyToId,
-          fileUrl,
-          fileName,
-          fileSize,
-          fileMime,
-        } = parsed.data;
-
-        if (user.role === "ADMIN")
-          return callback?.("Administrators have read-only access to task evidence");
-        const issue = await prisma.issue.findUnique({
-          where: { id: issueId },
-          select: {
-            clientId: true,
-            developerId: true,
-            title: true,
-            status: true,
-          },
-        });
-        if (!issue) return callback?.("Task not found");
-        const roomName = `task:${issueId}`;
-        if (!canWriteIssueChat(issue, user))
-          return callback?.("You cannot send messages in this task");
-        if (!socket.rooms.has(roomName))
-          return callback?.("Join this task room before sending a message");
-
-        if (replyToId) {
-          const replyTarget = await prisma.message.findFirst({
-            where: { id: replyToId, issueId, isDeleted: false },
-            select: { id: true },
-          });
-          if (!replyTarget) return callback?.("The message you are replying to was not found");
-        }
-
-        if (type === "FILE") {
-          let uploadedByUser = false;
-          let objectKey: string | null = null;
-          try {
-            const file = new URL(fileUrl || "");
-            const appOrigin = new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:4000")
-              .origin;
-            const key = file.searchParams.get("key");
-            uploadedByUser =
-              file.origin === appOrigin &&
-              file.pathname === "/api/uploads" &&
-              file.searchParams.getAll("key").length === 1 &&
-              Boolean(
-                key &&
-                key.startsWith(`${user.id}/`) &&
-                !key.includes("..") &&
-                key.split("/").length === 2,
-              );
-            if (uploadedByUser) objectKey = key;
-          } catch {
-            uploadedByUser = false;
-          }
-          if (
-            !fileUrl ||
-            !fileName ||
-            !fileSize ||
-            !fileMime ||
-            !uploadedByUser ||
-            fileName.length > 160 ||
-            !Number.isInteger(fileSize) ||
-            fileSize > MAX_FILE_SIZE_BYTES ||
-            !ALLOWED_FILE_TYPES.includes(fileMime as never)
-          ) {
-            return callback?.("Upload a supported file before sending it");
-          }
-          const s3 = getS3Storage();
-          if (s3 && objectKey) {
-            try {
-              const object = await s3.client.send(
-                new HeadObjectCommand({ Bucket: s3.bucket, Key: objectKey }),
-              );
-              uploadedByUser =
-                object.ContentLength === fileSize &&
-                object.ContentType === fileMime &&
-                object.Metadata?.uploader === user.id;
-            } catch {
-              uploadedByUser = false;
-            }
-          } else if (process.env.NODE_ENV !== "production" && objectKey) {
-            const localPath = localUploadPath(objectKey);
-            try {
-              uploadedByUser = Boolean(
-                localPath && (await stat(localPath.destination)).size === fileSize,
-              );
-            } catch {
-              uploadedByUser = false;
-            }
-          }
-          if (!uploadedByUser) return callback?.("The uploaded file could not be verified");
-        }
-
-        // Fast path for a retry whose original message has already committed.
-        if (clientMessageId) {
-          const existing = await prisma.message.findFirst({
-            where: { clientMessageId, senderId: user.id, issueId },
-            include: { attachments: true },
-          });
-          if (existing) {
-            io.to(roomName).emit("message:new", toMessagePayload(existing, user));
-            callback?.(); // Already processed
-            return;
-          }
-        }
-
-        const guard = await guardMessage(content, { issueId });
-        // File names are user input too, so they get the same masking as message text.
-        const fileNameScan = scanAndMask(fileName ?? "");
-        const wasModified = guard.wasModified || fileNameScan.wasModified;
-        const originalHash = wasModified
-          ? auditHash(content)
-          : undefined;
-        const startedAt = Date.now();
-        let message!: StoredMessage;
-        let alreadyPersisted = false;
-        let notification: Awaited<ReturnType<typeof prisma.notification.create>> | null = null;
-        for (let attempt = 0; ; attempt++) {
-          try {
-            message = await prisma.$transaction(
-              async (tx) => {
-                const currentIssue = await tx.issue.findUnique({
-                  where: { id: issueId },
-                  select: { clientId: true, developerId: true, status: true },
-                });
-                if (!currentIssue || !canWriteIssueChat(currentIssue, user)) {
-                  throw new Error("Task state changed before the message was saved");
-                }
-                if (replyToId) {
-                  const replyTarget = await tx.message.findFirst({
-                    where: { id: replyToId, issueId, isDeleted: false },
-                    select: { id: true },
-                  });
-                  if (!replyTarget) throw new Error("The message you are replying to was not found");
-                }
-                if (clientMessageId) {
-                  const duplicate = await tx.message.findFirst({
-                    where: { clientMessageId, senderId: user.id, issueId },
-                    include: { attachments: true },
-                  });
-                  if (duplicate) {
-                    alreadyPersisted = true;
-                    return duplicate;
-                  }
-                }
-                const dispute = await tx.dispute.findUnique({ where: { issueId }, select: { raisedAt: true } });
-                const created = await tx.message.create({
-                  data: {
-                    content: guard.content,
-                    type,
-                    issueId,
-                    senderId: user.id,
-                    clientMessageId: clientMessageId || null,
-                    replyToId: replyToId || null,
-                    wasModified,
-                    afterDispute: Boolean(dispute?.raisedAt && dispute.raisedAt <= new Date()),
-                    ...(originalHash ? { originalHash } : {}),
-                  },
-                });
-
-                if (type === "FILE" && fileUrl && fileName && fileSize != null && fileMime) {
-                  await tx.attachment.create({
-                    data: {
-                      messageId: created.id,
-                      uploaderId: user.id,
-                      fileName: fileNameScan.content,
-                      fileUrl,
-                      fileSize,
-                      fileMime,
-                    },
-                  });
-                }
-
-                const recipientId = currentIssue.clientId === user.id ? currentIssue.developerId : currentIssue.clientId;
-                if (recipientId) {
-                  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${recipientId}), hashtext(${issueId}))::text`;
-                  // A fresh ID prevents a delayed read of the old notification hiding this message.
-                  await tx.notification.updateMany({ where: { userId: recipientId, type: NotificationType.MESSAGE_RECEIVED, isRead: false, link: `/issues/${issueId}` }, data: { isRead: true } });
-                  notification = await tx.notification.create({ data: {
-                    userId: recipientId, actorId: user.id, type: NotificationType.MESSAGE_RECEIVED,
-                    title: `Tin nhắn mới trong “${issue.title}”`,
-                    body: type === "FILE" ? `${user.name || "Thành viên"} đã gửi một tệp.` : guard.content.slice(0, 180),
-                    link: `/issues/${issueId}`, data: { issueId, messageId: created.id },
-                  } });
-                }
-
-                return tx.message.findUniqueOrThrow({
-                  where: { id: created.id },
-                  include: { attachments: true },
-                });
-              },
-              { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-            );
-            break;
-          } catch (error) {
-            const isSerializationConflict =
-              error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
-            if (!isSerializationConflict) throw error;
-            const duplicate = clientMessageId ? await prisma.message.findFirst({
-              where: { clientMessageId, senderId: user.id, issueId }, include: { attachments: true },
-            }) : null;
-            if (duplicate) {
-              message = duplicate;
-              alreadyPersisted = true;
-              break;
-            }
-            if (attempt >= 2) throw error;
-            notification = null;
-            alreadyPersisted = false;
-          }
-        }
-
-        if (alreadyPersisted) {
-          io.to(roomName).emit("message:new", toMessagePayload(message, user));
-          callback?.();
-          return;
-        }
-
-        if (wasModified) {
-          const outputHash = auditHash(guard.content);
-          void prisma.aILog
-            .create({
-              data: {
-                task: "GUARD",
-                model: "regex-ruleset-v1",
-                provider: "local",
-                issueId,
-                latencyMs: Date.now() - startedAt,
-                ...(originalHash ? { inputHash: originalHash } : {}),
-                outputHash,
-                status: AILogStatus.SUCCESS,
-              },
-            })
-            .catch((error) =>
-              log.warn({ error, issueId }, "Failed to persist AI Guard audit record"),
-            );
-        }
-
-        io.to(roomName).emit("message:new", toMessagePayload(message, user));
-
-        if (notification) emitNotification(notification);
-
+        if (!user) { socket.disconnect(true); return callback?.("Unauthorized"); }
+        enforceMessageRate(user.id);
+        if (user.role === "ADMIN") return callback?.("Administrators have read-only access to task evidence");
+        const room = data.conversationId ? await accessibleConversation(prisma, data.conversationId, user, true) : await prisma.$transaction((tx) => workConversation(tx, data.issueId, user));
+        if (!socket.rooms.has(`conv:${room.id}`) && !(room.kind === "ISSUE_WORK" && socket.rooms.has(`task:${room.issueId}`))) return callback?.("Join this task room before sending a message");
+        const result = await saveConversationMessage(prisma, user, { ...data, conversationId: room.id });
+        broadcastConversationMessage(io, result);
         callback?.();
       } catch (error) {
         log.error({ error }, "Failed to process message");
-        callback?.("Failed to send message");
+        const code = error && typeof error === "object" && "extensions" in error ? (error.extensions as { code?: string }).code : null;
+        if (code === "FORBIDDEN") return callback?.(data.conversationId ? "You cannot send messages in this conversation" : "You cannot send messages in this task");
+        callback?.(error instanceof Error && ["RATE_LIMITED", "NOT_FOUND"].includes(code ?? "") ? error.message : "Failed to send message");
       }
     });
 
@@ -446,4 +154,11 @@ export function getSocketIO(): Server<ClientToServerEvents, ServerToClientEvents
 /** Close every active connection after a user's session is revoked or banned. */
 export function disconnectUserSockets(userId: string): void {
   getSocketIO().in(`user:${userId}`).disconnectSockets(true);
+}
+
+export function broadcastConversationMessage(io: Server<ClientToServerEvents, ServerToClientEvents>, result: Awaited<ReturnType<typeof saveConversationMessage>>) {
+  io.to(`conv:${result.room.id}`).emit("message:new", toMessagePayload(result.message, result.message.sender));
+  if (!result.duplicate) for (const member of result.room.participants.filter((p) => p.userId !== result.message.senderId)) {
+    io.to(`user:${member.userId}`).emit("inbox:update", { conversationId: result.room.id, lastMessageAt: result.message.createdAt.toISOString(), unreadDelta: 1 });
+  }
 }

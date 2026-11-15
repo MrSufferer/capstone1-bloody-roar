@@ -55,13 +55,13 @@ builder.queryFields((t) => ({
         where: { id: args.issueId },
         select: { clientId: true },
       });
-      if (!issue) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
+      if (!issue) throw gqlError("Bounty not found", "NOT_FOUND");
       if (issue.clientId !== user.id)
-        throw gqlError("Chỉ chủ bài toán mới được xem danh sách ứng viên", "FORBIDDEN");
+        throw gqlError("Only the bounty owner can view applicants", "FORBIDDEN");
       const page = parseOrThrow(z.object({ first: z.number().int().min(1).max(MAX_PAGE_SIZE).nullish(), after: z.string().max(256).nullish() }), args);
       const cursor = page.after ? decodeCursor(page.after) : null;
       if (cursor && !await ctx.db.application.findFirst({ where: { id: cursor, issueId: args.issueId }, select: { id: true } }))
-        throw gqlError("Cursor không thuộc danh sách ứng viên", "INVALID_CURSOR");
+        throw gqlError("Cursor does not belong to this applicant list", "INVALID_CURSOR");
       return ctx.db.application.findMany({ ...query, where: { issueId: args.issueId },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: page.first ?? DEFAULT_PAGE_SIZE,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: APPLICATION_INCLUDE });
@@ -92,7 +92,7 @@ builder.mutationField("applyToIssue", (t) =>
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       if (user.role === UserRole.ADMIN)
-        throw gqlError("Quản trị viên không thể ứng tuyển", "ADMIN_NOT_ALLOWED");
+        throw gqlError("Admins cannot apply", "ADMIN_NOT_ALLOWED");
       const input = parseOrThrow(ApplySchema, {
         issueId: String(args.input.issueId),
         ...(args.input.message != null ? { message: args.input.message } : {}),
@@ -110,14 +110,14 @@ builder.mutationField("applyToIssue", (t) =>
             const issue = await tx.issue.findUnique({
               where: { id: input.issueId },
             });
-            if (!issue || issue.isDraft) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
+            if (!issue || issue.isDraft) throw gqlError("Bounty not found", "NOT_FOUND");
             if (issue.clientId === user.id)
-              throw gqlError("Bạn không thể ứng tuyển vào bài toán của mình", "SELF_APPLICATION");
+              throw gqlError("You cannot apply to your own bounty", "SELF_APPLICATION");
             if (
               issue.status !== IssueStatus.OPEN ||
               (issue.expiresAt && issue.expiresAt <= new Date())
             ) {
-              throw gqlError("Bài toán không còn nhận ứng tuyển", "ISSUE_NOT_OPEN");
+              throw gqlError("This bounty no longer accepts applications", "ISSUE_NOT_OPEN");
             }
 
             const previous = await tx.application.findUnique({
@@ -129,7 +129,7 @@ builder.mutationField("applyToIssue", (t) =>
               },
             });
             if (previous && previous.status !== ApplicationStatus.WITHDRAWN) {
-              throw gqlError("Bạn đã ứng tuyển vào bài toán này", "ALREADY_APPLIED");
+              throw gqlError("You already applied to this bounty", "ALREADY_APPLIED");
             }
 
             const application = previous
@@ -186,8 +186,8 @@ builder.mutationField("applyToIssue", (t) =>
       await createNotificationSafely(ctx.db, {
         userId: result.issue.clientId,
         type: "NEW_APPLICANT",
-        title: "Có ứng viên mới",
-        body: `${user.name || "Một developer"} đã ứng tuyển vào “${result.issue.title}”.`,
+        title: "New applicant",
+        body: `${user.name || "A developer"} applied to “${result.issue.title}”.`,
         actorId: user.id,
         link: `/issues/${result.issue.id}`,
         data: {
@@ -209,11 +209,11 @@ builder.mutationField("withdrawApplication", (t) =>
       const application = await ctx.db.application.findUnique({
         where: { id: String(args.id) },
       });
-      if (!application) throw gqlError("Đơn ứng tuyển không tồn tại", "NOT_FOUND");
+      if (!application) throw gqlError("Application not found", "NOT_FOUND");
       if (application.developerId !== user.id)
-        throw gqlError("Bạn không có quyền rút đơn này", "FORBIDDEN");
+        throw gqlError("You cannot withdraw this application", "FORBIDDEN");
       if (application.status !== ApplicationStatus.PENDING)
-        throw gqlError("Đơn này không thể rút", "APPLICATION_NOT_WITHDRAWABLE");
+        throw gqlError("This application cannot be withdrawn", "APPLICATION_NOT_WITHDRAWABLE");
       const withdrawn = await ctx.db.application.updateMany({
         where: {
           id: application.id,
@@ -223,7 +223,7 @@ builder.mutationField("withdrawApplication", (t) =>
         data: { status: ApplicationStatus.WITHDRAWN },
       });
       if (withdrawn.count !== 1)
-        throw gqlError("Đơn này vừa được xử lý và không thể rút", "APPLICATION_NOT_WITHDRAWABLE");
+        throw gqlError("This application was just processed and cannot be withdrawn", "APPLICATION_NOT_WITHDRAWABLE");
       return ctx.db.application.findUniqueOrThrow({
         where: { id: application.id },
         include: APPLICATION_INCLUDE,
@@ -242,23 +242,23 @@ builder.mutationField("rejectApplication", (t) =>
         where: { id: String(args.id) },
         include: { issue: { select: { id: true, clientId: true, title: true, status: true } } },
       });
-      if (!application) throw gqlError("Đơn ứng tuyển không tồn tại", "NOT_FOUND");
+      if (!application) throw gqlError("Application not found", "NOT_FOUND");
       if (application.issue.clientId !== user.id)
-        throw gqlError("Chỉ chủ task mới được từ chối đơn này", "FORBIDDEN");
+        throw gqlError("Only the bounty owner can decline this application", "FORBIDDEN");
       if (application.issue.status !== IssueStatus.OPEN)
-        throw gqlError("Task không còn mở để xử lý ứng viên", "ISSUE_NOT_OPEN");
+        throw gqlError("This bounty is no longer open for applicants", "ISSUE_NOT_OPEN");
       const rejected = await ctx.db.application.updateMany({
         where: { id: application.id, status: ApplicationStatus.PENDING },
         data: { status: ApplicationStatus.REJECTED },
       });
       if (rejected.count !== 1)
-        throw gqlError("Chỉ có thể từ chối đơn đang chờ duyệt", "APPLICATION_NOT_REJECTABLE");
+        throw gqlError("Only pending applications can be declined", "APPLICATION_NOT_REJECTABLE");
 
       await createNotificationSafely(ctx.db, {
         userId: application.developerId,
         type: "APPLICATION_REJECTED",
-        title: "Đơn ứng tuyển không được chọn",
-        body: `Đơn của bạn cho “${application.issue.title}” đã không được chọn.`,
+        title: "Application not selected",
+        body: `Your application for “${application.issue.title}” was not selected.`,
         actorId: user.id,
         link: `/issues/${application.issue.id}`,
         data: { issueId: application.issue.id, applicationId: application.id },

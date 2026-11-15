@@ -64,6 +64,7 @@ contract BloodyRoarEscrow is Ownable2Step, Pausable, ReentrancyGuard {
         bytes32 deliveryHash;
         Phase phase;
         ResolutionKind resolutionKind;
+        uint256 submittedAt;
     }
 
     struct SettlementProposal {
@@ -256,7 +257,8 @@ contract BloodyRoarEscrow is Ownable2Step, Pausable, ReentrancyGuard {
             termsHash: termsHash,
             deliveryHash: bytes32(0),
             phase: Phase.FUNDED,
-            resolutionKind: ResolutionKind.NONE
+            resolutionKind: ResolutionKind.NONE,
+            submittedAt: 0
         });
         totalUnresolvedPrincipal += amount;
 
@@ -272,6 +274,7 @@ contract BloodyRoarEscrow is Ownable2Step, Pausable, ReentrancyGuard {
         if (block.timestamp > escrow.deliveryDeadline) revert DeadlinePassed(escrow.deliveryDeadline);
 
         escrow.deliveryHash = deliveryHash;
+        escrow.submittedAt = block.timestamp;
         emit WorkSubmitted(escrowId, msg.sender, deliveryHash);
     }
 
@@ -295,7 +298,7 @@ contract BloodyRoarEscrow is Ownable2Step, Pausable, ReentrancyGuard {
         Escrow storage escrow = _escrows[escrowId];
         if (escrow.phase != Phase.FUNDED) revert InvalidPhase(escrowId, escrow.phase);
         if (escrow.deliveryHash == bytes32(0)) revert NoDelivery();
-        uint256 deadline = escrow.deliveryDeadline + REVIEW_PERIOD;
+        uint256 deadline = escrow.submittedAt + REVIEW_PERIOD;
         if (block.timestamp < deadline) revert ReviewWindowNotReached(deadline);
         _resolve(escrowId, 0, ResolutionKind.REVIEW_TIMEOUT, bytes32(0));
     }

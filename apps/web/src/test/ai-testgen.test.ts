@@ -46,6 +46,7 @@ describe("generateTestCases context (AI-10)", () => {
       },
     };
     const db = {
+      sourceSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
       issue: {
         findUnique: vi.fn((_args: unknown) =>
           Promise.resolve({
@@ -70,4 +71,18 @@ describe("generateTestCases context (AI-10)", () => {
     expect(created).toHaveLength(3);
     expect(created.every((row) => row.source === "AI" && row.isApproved === false)).toBe(true);
   });
+});
+
+it("removes secrets from stored source context before calling AI", async () => {
+  completeAI.mockClear();
+  completeAI.mockRejectedValueOnce(new Error("stop after inspecting prompt"));
+  const db = {
+    issue: { findUnique: async () => ({ id: "privacy", clientId: client.id, status: "OPEN", title: "safe", description: "safe", requiredSkills: [] }) },
+    sourceSnapshot: { findUnique: async () => ({ status: "READY", framework: "VITEST", context: '.env\nconfig.ts\nsafe.ts\n\n--- .env ---\nPRIVATE_KEY=env-secret\n\n--- config.ts ---\nexport const API_KEY = "config-secret";\n\n--- safe.ts ---\nexport const safe = 42;' }) },
+  };
+  await expect(callGenerate(db)).rejects.toThrow();
+  const prompt = completeAI.mock.calls[0]![0].messages[1].content;
+  expect(prompt).not.toContain("env-secret");
+  expect(prompt).not.toContain("config-secret");
+  expect(prompt).toContain("export const safe = 42");
 });

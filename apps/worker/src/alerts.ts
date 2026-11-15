@@ -1,12 +1,15 @@
 import { errorMessage } from "./log";
 import { health } from "./runtime/health";
 import type { Job } from "./runtime/scheduler";
+import { privateKeyToAccount, type Hex } from "@bloody-roar/shared";
 
 export const LAG_ALERT_SECONDS = 300;
 export const RPC_ERROR_ALERT_STREAK = 5;
 
-export function evaluateAlerts(input: { lagSeconds: number | null; rpcErrorStreak: number }): string[] {
+export function evaluateAlerts(input: { lagSeconds: number | null; rpcErrorStreak: number; relayerBalanceWei?: bigint; relayerMinGasWei?: bigint; reorgBeyondWindow?: boolean }): string[] {
   const alerts: string[] = [];
+  if (input.reorgBeyondWindow) alerts.push("REORG_BEYOND_WINDOW");
+  if (input.relayerBalanceWei !== undefined && input.relayerMinGasWei !== undefined && input.relayerBalanceWei < input.relayerMinGasWei) alerts.push("RELAYER_LOW_GAS");
   if (input.lagSeconds !== null && input.lagSeconds > LAG_ALERT_SECONDS) {
     alerts.push(`projection lag ${Math.round(input.lagSeconds)}s is over ${LAG_ALERT_SECONDS}s`);
   }
@@ -27,13 +30,21 @@ export async function sendAlerts(alerts: string[], webhookUrl: string | undefine
 }
 
 // Lag is the time the cursor has stood still while the safe head is ahead of it.
+let lowGasReported = false;
 export const alertsJob: Job = {
   name: "alerts",
   everyMs: 30_000,
-  async run({ config, log, now }) {
+  async run({ config, log, now, rpc }) {
     const behind = health.lastSafeBlock !== null && health.lastScannedBlock !== null && health.lastSafeBlock > health.lastScannedBlock;
     const lagSeconds = behind && health.cursorMovedAt !== null ? (now().getTime() - health.cursorMovedAt) / 1000 : null;
     const alerts = evaluateAlerts({ lagSeconds, rpcErrorStreak: health.rpcErrorStreak });
+    if (config.relayerPrivateKey) {
+      const account = privateKeyToAccount(config.relayerPrivateKey as Hex);
+      const balance = BigInt(await rpc.call<string>("eth_getBalance", [account.address, "latest"]));
+      const low = balance < config.relayerMinGasWei;
+      if (low && !lowGasReported) alerts.push("RELAYER_LOW_GAS");
+      lowGasReported = low;
+    }
     if (alerts.length === 0) return;
     for (const alert of alerts) log.warn({ alert }, "worker alert");
     await sendAlerts(alerts, config.alertWebhookUrl).catch((err: unknown) =>

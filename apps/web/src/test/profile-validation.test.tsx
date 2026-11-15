@@ -14,14 +14,17 @@ describe("profile validation", () => {
     useAuthStore.setState({ user: user as never, status: "authenticated" });
     request.mockImplementation(async (query: string) => {
       if (query.includes("MyProfile")) return { me: { ...user, skills: [], attestations: [] } };
-      throw new GraphQLRequestError({ message: "invalid", extensions: { code: "BAD_USER_INPUT", details: { fieldErrors: { avatar: ["Avatar URL must use HTTP or HTTPS"] } } } });
+      throw new GraphQLRequestError({ message: "invalid", extensions: { code: "BAD_USER_INPUT", details: { fieldErrors: { portfolioUrl: ["Portfolio URL must use HTTP or HTTPS"] } } } });
     });
     render(<ProfileView />);
-    const avatar = await screen.findByLabelText("avatarUrl");
-    fireEvent.change(avatar, { target: { value: "ftp://example.com/image" } });
+    const portfolio = await screen.findByLabelText("Portfolio");
+    fireEvent.change(portfolio, { target: { value: "ftp://example.com/site" } });
     fireEvent.click(screen.getByRole("button", { name: /saveProfile/ }));
-    await waitFor(() => expect(screen.getByText("Avatar URL must use HTTP or HTTPS")).toBeTruthy());
-    expect((avatar as HTMLInputElement).value).toBe("ftp://example.com/image");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Portfolio URL must use HTTP or HTTPS"));
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("mutation UpdateProfile"), {
+      input: expect.objectContaining({ portfolioUrl: "ftp://example.com/site" }),
+    });
+    expect(portfolio).toHaveValue("ftp://example.com/site");
   });
   it("hides the previous profile and disables saving when the next account cannot load", async () => {
     const user = { id: "a", role: "DEVELOPER", walletAddress: "0x123", reputationScore: 0, completedTaskCount: 0 };

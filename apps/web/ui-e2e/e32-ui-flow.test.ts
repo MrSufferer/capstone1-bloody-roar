@@ -54,7 +54,7 @@ async function clickButton(page: Page, name: string) {
   }
 }
 
-const expectNoError = (page: Page) => expect(page.locator(".bn-bad")).toHaveCount(0);
+const expectNoError = (page: Page) => expect(page.locator('[role="alert"]').filter({ hasText: /failed|error|not the signed-in account/i })).toHaveCount(0);
 
 test("E32: client funds, developer delivers, client releases, developer claims, all through the UI", async () => {
   const f = await fixture();
@@ -74,7 +74,7 @@ test("E32: client funds, developer delivers, client releases, developer claims, 
   // The submit form lives under the Delivery & Submissions tab, not the default Overview tab.
   await developer.getByRole("tab", { name: /Delivery & Submissions/ }).click();
   try {
-    await developer.getByPlaceholder("Summary of changes and test instructions...").fill("Fixed the release flow and added a regression test.");
+    await developer.getByRole("textbox", { name: "Summary of changes" }).fill("Fixed the release flow and added a regression test.");
   } catch (error) {
     appendFileSync(uiLog, `[dump] no delivery textarea. Page text:\n${(await developer.locator("body").innerText().catch(() => "")).slice(0, 2000)}\n`);
     throw error;
@@ -96,7 +96,7 @@ test("E32: client funds, developer delivers, client releases, developer claims, 
   const owed = await claimable(f.prisma, f.developer.walletAddress);
   const balanceBefore = await tokenBalance(f, f.accounts[3]!);
   await developer.goto(`${BASE}/dashboard`, { waitUntil: "domcontentloaded" });
-  await developer.getByRole("button", { name: "Rút tiền" }).click();
+  await developer.getByRole("button", { name: "Withdraw funds" }).click();
   await waitFor(async () => (await tokenBalance(f, f.accounts[3]!)) - balanceBefore === owed);
   await expectNoError(developer);
 }, 300_000);
@@ -111,7 +111,7 @@ test("E32: the UI refuses to sign when the wallet account differs from the signe
   const intentsBefore = await f.prisma.transactionIntent.count({ where: { issueId: f.issueId } });
   await clickButton(page, "Fund escrow");
 
-  await expect(page.locator(".bn-bad")).toContainText("khác tài khoản đăng nhập");
+  await expect(page.getByRole("alert").filter({ hasText: "not the signed-in account" })).toBeVisible();
   expect(await f.prisma.fundingReservation.count({ where: { issueId: f.issueId, status: "AWAITING_FUNDING" } })).toBe(1);
   expect(await f.prisma.transactionIntent.count({ where: { issueId: f.issueId } })).toBe(intentsBefore);
 }, 120_000);

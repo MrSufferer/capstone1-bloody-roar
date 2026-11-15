@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
@@ -5,13 +6,17 @@ import { Client } from "pg";
 import { prisma, PROJECTION_CHANGED_CHANNEL } from "@bloody-roar/database";
 import { notifyProjectionChanged } from "../src/indexer/notify";
 
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
+
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 
 const url = process.env.DIRECT_URL || process.env.DATABASE_URL || "";
 const listener = new Client({ connectionString: url });
 const received: Array<{ channel: string; payload: string }> = [];
-await listener.connect();
-await listener.query(`LISTEN ${PROJECTION_CHANGED_CHANNEL}`);
+beforeAll(async () => {
+  await listener.connect();
+  await listener.query(`LISTEN ${PROJECTION_CHANGED_CHANNEL}`);
+});
 listener.on("notification", (msg) => received.push({ channel: msg.channel, payload: msg.payload ?? "" }));
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,4 +44,6 @@ test("a rolled-back transaction sends nothing", async () => {
   ).rejects.toThrow("rollback");
   await sleep(200);
   expect(received).toEqual([]);
+});
+
 });

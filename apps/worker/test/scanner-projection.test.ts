@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
@@ -8,6 +9,8 @@ import { scanOnce } from "../src/indexer/scanner";
 import { handleReorg } from "../src/indexer/reorg";
 import { requestReplay } from "../src/indexer/replay";
 import { cleanupChain, fakeRpc, newChain, rawLog, testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const config = testConfig();
 const address = () => `0x${randomBytes(20).toString("hex")}` as Hex;
@@ -129,4 +132,6 @@ test("scanner orders deposit and delivery, folds state, applies effects and is i
   await expect(scanOnce({ db: prisma, rpc: fakeRpc(chain), config })).rejects.toThrow();
   expect(await prisma.chainEvent.count({ where: { txHash: "0xvalid", chainId: config.chainId } })).toBe(0);
   expect((await prisma.projectionCheckpoint.findUniqueOrThrow({ where: { chainId_contractAddress: { chainId: config.chainId, contractAddress: config.escrowAddress } } })).lastScannedBlock).toBe(100n);
+});
+
 });

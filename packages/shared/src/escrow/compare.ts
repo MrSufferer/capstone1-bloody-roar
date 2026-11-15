@@ -13,6 +13,7 @@ export type OnchainEscrowView = {
   deliveryDeadline: bigint;
   termsHash: Hex;
   deliveryHash: Hex | null;
+  submittedAt: bigint | null;
   phase: EscrowPhase;
   resolutionKind: EscrowResolutionKind;
   settlement: SettlementState | null;
@@ -43,6 +44,7 @@ export function compareProjectionWithChain(projection: EscrowState, onchain: Onc
     ["deliveryDeadline", projection.deliveryDeadline, onchain.deliveryDeadline],
     ["termsHash", projection.termsHash, onchain.termsHash],
     ["deliveryHash", projection.deliveryHash, onchain.deliveryHash],
+    ["submittedAt", projection.submittedAt, onchain.submittedAt],
     ["phase", projection.phase, onchain.phase],
     ["resolutionKind", projection.resolutionKind, onchain.resolutionKind],
     ["settlement", projection.settlement, onchain.settlement],

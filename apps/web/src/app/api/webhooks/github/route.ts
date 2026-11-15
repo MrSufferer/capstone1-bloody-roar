@@ -75,8 +75,8 @@ export async function POST(request: Request) {
       await createNotificationIdempotent(prisma, {
         userId: submission.issue.clientId,
         type: "PR_MERGED",
-        title: "Pull request đã được merge",
-        body: `PR #${pr!.number} của bài ${submission.issue.title} đã merge. Kiểm tra và xác nhận trên hệ thống.`,
+        title: "Pull request merged",
+        body: `PR #${pr!.number} for ${submission.issue.title} was merged. Review and confirm it on the platform.`,
         link: `/issues/${submission.issue.id}`,
         data: { issueId: submission.issue.id, prUrl },
         dedupeKey: `pr-merged:${submission.issue.id}:${pr!.number}`,

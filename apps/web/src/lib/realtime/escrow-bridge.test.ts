@@ -23,8 +23,10 @@ describe("routeNotification", () => {
 
   it("sends a new notification to the user room", () => {
     const { io, emitted } = fakeIo();
-    routeNotification(io, "notification_created", JSON.stringify({ userId: "user_1", id: "n_1" }));
+    const users: string[] = [];
+    routeNotification(io, "notification_created", JSON.stringify({ userId: "user_1", id: "n_1" }), (userId) => users.push(userId));
     expect(emitted).toEqual([{ room: "user:user_1", event: "notification:new", data: { id: "n_1" } }]);
+    expect(users).toEqual(["user_1"]);
   });
 
   it("ignores channels it does not know and payloads without a target", () => {

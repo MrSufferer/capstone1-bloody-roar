@@ -27,20 +27,20 @@ builder.mutationField("draftRuling", (t) => t.field({
   resolve: async (_root, args, ctx) => {
     const admin = requireAdmin(ctx);
     if (args.clientBps < 0 || args.clientBps > 10_000 || args.rationale.length < 20 || args.rationale.length > 10_000)
-      throw gqlError("Tỷ lệ hoặc lý do không hợp lệ", "BAD_USER_INPUT");
+      throw gqlError("Invalid split or reason", "BAD_USER_INPUT");
     const issueId = String(args.issueId);
     const projection = await ctx.db.escrowProjection.findUnique({ where: { issueId } });
-    if (!projection?.escrowKey) throw gqlError("Bài toán chưa có ký quỹ", "NOT_FOUND");
+    if (!projection?.escrowKey) throw gqlError("This bounty has no escrow yet", "NOT_FOUND");
     const target = escrowTarget();
     if (projection.chainId !== target.chainId || projection.contractAddress.toLowerCase() !== target.contractAddress.toLowerCase())
-      throw gqlError("Ký quỹ không khớp cấu hình", "ESCROW_CHAIN_MISMATCH");
+      throw gqlError("Escrow does not match the configured contract", "ESCROW_CHAIN_MISMATCH");
     const now = await readChainTime(projection.chainId);
     const start = args.kind === "INITIAL" ? projection.disputeRaisedAt : projection.challengedAt;
     if ((args.kind === "INITIAL" ? projection.phase !== "DISPUTED" : projection.phase !== "CHALLENGED") || !start)
-      throw gqlError("Trạng thái tranh chấp không hợp lệ", "INVALID_PHASE");
+      throw gqlError("Invalid dispute state", "INVALID_PHASE");
     const elapsed = now.getTime() - start.getTime();
     if (elapsed >= ARBITER_STALL_DAYS * DAY_MS || (args.kind === "INITIAL" && elapsed < DISPUTE_EVIDENCE_RESPONSE_HOURS * HOUR_MS) || elapsed < 0)
-      throw gqlError("Ngoài thời hạn phán quyết", "DEADLINE_PASSED");
+      throw gqlError("Outside the ruling window", "DEADLINE_PASSED");
     const decisionHash = computeDecisionHash({ issueId, escrowId: projection.escrowKey, clientBps: args.clientBps, rationale: args.rationale });
     const draft = await ctx.db.$transaction(async (tx) => {
       const saved = await tx.rulingDraft.upsert({ where: { decisionHash }, update: {}, create: { issueId, kind: args.kind, clientBps: args.clientBps, rationale: args.rationale, decisionHash, draftedById: admin.id } });
@@ -58,10 +58,10 @@ builder.mutationField("draftRuling", (t) => t.field({
 
 async function rulingProjection(ctx: GraphQLContext, issueId: string) {
   const projection = await ctx.db.escrowProjection.findUnique({ where: { issueId } });
-  if (!projection?.escrowKey) throw gqlError("Bài toán chưa có ký quỹ", "NOT_FOUND");
+  if (!projection?.escrowKey) throw gqlError("This bounty has no escrow yet", "NOT_FOUND");
   const target = escrowTarget();
   if (projection.chainId !== target.chainId || projection.contractAddress.toLowerCase() !== target.contractAddress.toLowerCase())
-    throw gqlError("Ký quỹ không khớp cấu hình", "ESCROW_CHAIN_MISMATCH");
+    throw gqlError("Escrow does not match the configured contract", "ESCROW_CHAIN_MISMATCH");
   return { ...projection, escrowKey: projection.escrowKey };
 }
 
@@ -74,29 +74,29 @@ for (const [field, method] of [["prepareChallengeRuling", "challengeRuling"], ["
       if (method === "challengeRuling") {
         const wallet = user.walletAddress.toLowerCase();
         if (wallet !== projection.client.toLowerCase() && wallet !== projection.developer.toLowerCase())
-          throw gqlError("Không được kháng cáo phán quyết này", "FORBIDDEN");
+          throw gqlError("This ruling cannot be appealed", "FORBIDDEN");
       }
       let deadline: Date;
       if (method === "finalizeArbiterTimeoutSplit") {
         const start = projection.phase === "DISPUTED" ? projection.disputeRaisedAt : projection.phase === "CHALLENGED" ? projection.challengedAt : null;
-        if (!start) throw gqlError("Trạng thái tranh chấp không hợp lệ", "INVALID_PHASE");
+        if (!start) throw gqlError("Invalid dispute state", "INVALID_PHASE");
         deadline = new Date(start.getTime() + ARBITER_STALL_DAYS * DAY_MS);
       } else {
         const kind = projection.phase === "INITIAL_RULING" ? "INITIAL" : projection.phase === "FINAL_RULING" && method === "finalizeRuling" ? "FINAL" : null;
-        if (!kind) throw gqlError("Trạng thái phán quyết không hợp lệ", "INVALID_PHASE");
+        if (!kind) throw gqlError("Invalid ruling state", "INVALID_PHASE");
         const ruling = await ctx.db.rulingRecord.findFirst({ where: { escrowIdHash: projection.escrowIdHash, kind }, orderBy: { postedAt: "desc" } });
-        if (!ruling) throw gqlError("Không tìm thấy phán quyết on-chain", "NOT_FOUND");
+        if (!ruling) throw gqlError("On-chain ruling not found", "NOT_FOUND");
         if (method === "challengeRuling") {
           const wallet = user.walletAddress.toLowerCase();
           const client = wallet === projection.client.toLowerCase(), developer = wallet === projection.developer.toLowerCase();
           if ((client && ruling.clientBps >= 10_000) || (developer && ruling.clientBps <= 0))
-            throw gqlError("Không được kháng cáo phán quyết này", "FORBIDDEN");
+            throw gqlError("This ruling cannot be appealed", "FORBIDDEN");
         }
         deadline = new Date(ruling.postedAt.getTime() + (kind === "INITIAL" ? DISPUTE_CHALLENGE_DAYS * DAY_MS : DISPUTE_FINAL_NOTICE_HOURS * HOUR_MS));
       }
       const now = await readChainTime(projection.chainId);
       if (method === "challengeRuling" ? now >= deadline : now < deadline)
-        throw gqlError("Ngoài thời hạn thực hiện", "DEADLINE_NOT_REACHED");
+        throw gqlError("Outside the execution window", "DEADLINE_NOT_REACHED");
       return createPreparedCall(ctx.db, { userId: user.id, issueId: projection.issueId, escrowKey: projection.escrowKey, method, args: { escrowId: projection.escrowKey } });
     },
   }));

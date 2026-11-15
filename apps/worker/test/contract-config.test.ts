@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { prisma } from "@bloody-roar/database";
@@ -5,6 +6,8 @@ import { encodeFunctionData, encodeFunctionResult, type Abi, type Hex, ESCROW_AB
 import { contractConfigJob } from "../src/jobs/contract-config";
 import type { RpcClient } from "../src/chain/client";
 import { testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const abi: Abi = ESCROW_ABI;
 
@@ -78,4 +81,6 @@ test("contractConfigJob upserts config from chain and normalizes pending address
     },
   });
   expect(count).toBe(1);
+});
+
 });

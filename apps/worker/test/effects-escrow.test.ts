@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
@@ -6,8 +7,9 @@ import { prisma, type Prisma } from "@bloody-roar/database";
 import { keccakUtf8, type FoldEffect } from "@bloody-roar/shared/escrow";
 import { applyFoldEffects } from "../src/effects";
 
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
+
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
-assertTestDatabase(process.env.TEST_DATABASE_URL);
 
 const run = randomBytes(4).toString("hex");
 const DAY_MS = 86_400_000;
@@ -19,11 +21,15 @@ const seconds = (date: Date) => BigInt(Math.floor(date.getTime() / 1000));
 const now = new Date();
 const deadline = new Date(now.getTime() + 30 * DAY_MS);
 
-const client = await prisma.user.create({ data: { walletAddress: address(), role: "CLIENT" } });
-const developer = await prisma.user.create({ data: { walletAddress: address(), role: "DEVELOPER" } });
-const rival = await prisma.user.create({ data: { walletAddress: address(), role: "DEVELOPER" } });
-const admin = await prisma.user.create({ data: { walletAddress: address(), role: "ADMIN" } });
-const userIds = [client.id, developer.id, rival.id, admin.id];
+let client: Awaited<ReturnType<typeof prisma.user.create>>, developer: typeof client, rival: typeof client, admin: typeof client;
+const userIds: string[] = [];
+beforeAll(async () => {
+  client = await prisma.user.create({ data: { walletAddress: address(), role: "CLIENT" } });
+  developer = await prisma.user.create({ data: { walletAddress: address(), role: "DEVELOPER" } });
+  rival = await prisma.user.create({ data: { walletAddress: address(), role: "DEVELOPER" } });
+  admin = await prisma.user.create({ data: { walletAddress: address(), role: "ADMIN" } });
+  userIds.push(client.id, developer.id, rival.id, admin.id);
+});
 const issueIds: string[] = [];
 const tokenIds: string[] = [];
 const escrowKeys: string[] = [];
@@ -283,4 +289,6 @@ afterAll(async () => {
   await prisma.issue.deleteMany({ where: { id: { in: issueIds } } });
   await prisma.token.deleteMany({ where: { id: { in: tokenIds } } });
   await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+});
+
 });

@@ -93,21 +93,21 @@ export const WALLET_OPTIONS: WalletOption[] = [
 export const SOCIAL_OPTIONS: WalletOption[] = [
   {
     id: "google",
-    name: "Tiếp tục với Google",
+    name: "Continue with Google",
     icon: "🌐",
     type: "social",
     provider: "google",
   },
   {
     id: "github",
-    name: "Tiếp tục với GitHub",
+    name: "Continue with GitHub",
     icon: "🐙",
     type: "social",
     provider: "github",
   },
   {
     id: "email",
-    name: "Đăng nhập bằng Email OTP",
+    name: "Sign in with email OTP",
     icon: "✉️",
     type: "social",
     provider: "email",
@@ -128,22 +128,22 @@ export async function connectInjectedWallet(walletId?: string): Promise<string> 
   if (!hasInjectedProvider(walletId)) {
     throw new Error(
       walletId === "coinbase"
-        ? "Không tìm thấy Coinbase Wallet Extension."
+        ? "Coinbase Wallet extension not found."
         : walletId === "metamask"
-          ? "Không tìm thấy MetaMask Extension."
-          : "Không tìm thấy ví Web3 trên trình duyệt. Vui lòng cài đặt MetaMask hoặc Rabby Wallet."
+          ? "MetaMask extension not found."
+          : "No Web3 wallet found in this browser. Install MetaMask or Rabby Wallet."
     );
   }
 
   const ethereum = getInjectedEthereum(walletId);
-  if (!ethereum) throw new Error("Ví Web3 chưa sẵn sàng.");
+  if (!ethereum) throw new Error("The Web3 wallet is not ready.");
   const result = await ethereum.request({
     method: "eth_requestAccounts",
   });
   const accounts = Array.isArray(result) ? result.filter((account): account is string => typeof account === "string") : [];
 
   if (!accounts || accounts.length === 0 || !accounts[0]) {
-    throw new Error("Không có tài khoản ví nào được chọn.");
+    throw new Error("No wallet account is selected.");
   }
 
   return toChecksumAddress(accounts[0]);
@@ -152,11 +152,11 @@ export async function connectInjectedWallet(walletId?: string): Promise<string> 
 /** Return the selected provider's current EVM chain id. */
 export async function getInjectedChainId(walletId?: string): Promise<number> {
   const ethereum = getInjectedEthereum(walletId);
-  if (!ethereum) throw new Error("Ví Web3 chưa sẵn sàng.");
+  if (!ethereum) throw new Error("The Web3 wallet is not ready.");
   const chainId = await ethereum.request({ method: "eth_chainId" });
-  if (typeof chainId !== "string") throw new Error("Không thể xác định mạng của ví.");
+  if (typeof chainId !== "string") throw new Error("Could not determine the wallet network.");
   const parsed = Number.parseInt(chainId, 16);
-  if (!Number.isSafeInteger(parsed)) throw new Error("Mạng ví không hợp lệ.");
+  if (!Number.isSafeInteger(parsed)) throw new Error("Invalid wallet network.");
   return parsed;
 }
 
@@ -166,7 +166,7 @@ export async function getInjectedChainId(walletId?: string): Promise<number> {
  */
 export async function ensureChain(chain: ChainConfig, walletId?: string): Promise<void> {
   const ethereum = getInjectedEthereum(walletId);
-  if (!ethereum) throw new Error("Ví Web3 chưa sẵn sàng.");
+  if (!ethereum) throw new Error("The Web3 wallet is not ready.");
   if (await getInjectedChainId(walletId) === chain.chainId) return;
 
   try {
@@ -194,7 +194,7 @@ export async function ensureChain(chain: ChainConfig, walletId?: string): Promis
   }
 
   if (await getInjectedChainId(walletId) !== chain.chainId) {
-    throw new Error(`Vui lòng chuyển ví sang ${chain.name} để tiếp tục.`);
+    throw new Error(`Switch your wallet to ${chain.name} to continue.`);
   }
 }
 
@@ -213,11 +213,11 @@ export async function signMessageWithInjected(
   walletId?: string
 ): Promise<string> {
   if (!hasInjectedProvider(walletId)) {
-    throw new Error("Ví Web3 chưa sẵn sàng.");
+    throw new Error("The Web3 wallet is not ready.");
   }
 
   const ethereum = getInjectedEthereum(walletId);
-  if (!ethereum) throw new Error("Ví Web3 chưa sẵn sàng.");
+  if (!ethereum) throw new Error("The Web3 wallet is not ready.");
 
   try {
     const from = (tryChecksumAddress(walletAddress) ?? walletAddress).toLowerCase();
@@ -227,7 +227,7 @@ export async function signMessageWithInjected(
       params: [hexMessage, from],
     });
     if (typeof signature !== "string" || signature.length < 130) {
-      throw new Error("Ví không trả về chữ ký hợp lệ.");
+      throw new Error("The wallet did not return a valid signature.");
     }
     return signature;
   } catch (err: unknown) {
@@ -242,8 +242,4 @@ export async function signMessageWithInjected(
 /**
  * Truncate Ethereum address for UI display (e.g., 0x1234...abcd)
  */
-export function shortenAddress(address?: string | null, chars = 4): string {
-  if (!address) return "";
-  if (address.length < 10) return address;
-  return `${address.substring(0, chars + 2)}...${address.substring(address.length - chars)}`;
-}
+export { shortenAddress } from "@/lib/utils";

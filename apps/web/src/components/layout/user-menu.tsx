@@ -1,9 +1,10 @@
 // apps/web/src/components/layout/user-menu.tsx
 // Trâm (UI/UX Designer) — User Profile Dropdown & Connect Button
-// Consolidated with Base Sepolia Network, Language & Theme Preferences
+// Consolidated theme preferences
 
 "use client";
 
+import dynamic from "next/dynamic";
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import {
@@ -12,7 +13,6 @@ import {
   Sun,
   Moon,
   Globe,
-  Languages,
   LogOut,
   User,
   LayoutDashboard,
@@ -21,11 +21,12 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useAuthStore } from "../../lib/store/use-auth-store";
-import { shortenAddress } from "../../lib/web3/client";
-import { ConnectModal } from "../auth/connect-modal";
+import { shortenAddress } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { useUiPreferences } from "@/lib/ui-preferences";
+
+const ConnectModal = dynamic(() => import("../auth/connect-modal").then((m) => m.ConnectModal), { ssr: false });
 
 export function UserMenu() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -34,7 +35,7 @@ export function UserMenu() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { user, logout, status, restoreSession } = useAuthStore();
-  const { language, setLanguage, theme, setTheme, t } = useUiPreferences();
+  const { theme, setTheme, t } = useUiPreferences();
   const isAuthenticated = Boolean(user);
 
   const [isMounted, setIsMounted] = useState(false);
@@ -79,65 +80,10 @@ export function UserMenu() {
   // Common Network & Preferences JSX
   const renderNetworkAndPreferences = () => (
     <>
-      {/* Network Card */}
-      <div className="flex items-center justify-between p-2.5 rounded-lg bg-[var(--surface-2)] border border-[var(--line-2)]">
-        <div className="flex items-center gap-2">
-          <span className="dot shrink-0" title="Network Connected" />
-          <div className="flex flex-col">
-            <span className="text-xs font-semibold text-[var(--ink)] flex items-center gap-1.5">
-              Base Sepolia
-              <span className="text-[10px] font-medium text-[var(--ok)] bg-[var(--ok)]/10 px-1.5 py-0.2 rounded">
-                Live
-              </span>
-            </span>
-            <span className="text-[10px] text-[var(--ink-3)] font-mono">Chain ID: 84532</span>
-          </div>
-        </div>
-        <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-[var(--sunk)] text-[var(--ink-2)] border border-[var(--line)]">
-          Testnet
-        </span>
-      </div>
-
       {/* Preferences Section */}
       <div className="pt-2.5 mt-2.5 border-t border-[var(--line-2)] space-y-2.5">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)] px-0.5">
           {t("preferences") || "Preferences"}
-        </div>
-
-        {/* Language Selector */}
-        <div className="flex items-center justify-between px-0.5">
-          <span className="text-xs text-[var(--ink-2)] flex items-center gap-1.5">
-            <Languages className="w-3.5 h-3.5 text-[var(--ink-3)]" />
-            <span>{t("language")}</span>
-          </span>
-          <div className="inline-flex rounded-md border border-[var(--line-2)] bg-[var(--surface-2)] p-0.5">
-            <button
-              type="button"
-              onClick={() => setLanguage("en")}
-              className={`px-2.5 py-1 text-xs font-semibold rounded transition-all cursor-pointer ${
-                language === "en"
-                  ? "bg-[var(--surface)] text-[var(--ink)] shadow-xs"
-                  : "text-[var(--ink-3)] hover:text-[var(--ink)]"
-              }`}
-              data-testid={language === "vi" ? "language-toggle" : "language-en-btn"}
-              aria-label="English"
-            >
-              EN
-            </button>
-            <button
-              type="button"
-              onClick={() => setLanguage("vi")}
-              className={`px-2.5 py-1 text-xs font-semibold rounded transition-all cursor-pointer ${
-                language === "vi"
-                  ? "bg-[var(--surface)] text-[var(--ink)] shadow-xs"
-                  : "text-[var(--ink-3)] hover:text-[var(--ink)]"
-              }`}
-              data-testid={language === "en" ? "language-toggle" : "language-vi-btn"}
-              aria-label="Tiếng Việt"
-            >
-              VI
-            </button>
-          </div>
         </div>
 
         {/* Theme Selector */}
@@ -206,7 +152,7 @@ export function UserMenu() {
             onClick={() => setIsDropdownOpen((prev) => !prev)}
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--line-2)] bg-[var(--surface)] text-[var(--ink-2)] transition-colors hover:bg-[var(--sunk)] hover:text-[var(--ink)] cursor-pointer"
             aria-label="Network & Preferences"
-            title="Base Sepolia & Preferences"
+            title="Preferences"
             data-testid="guest-menu-btn"
           >
             <Globe className="h-4 w-4" />
@@ -222,10 +168,9 @@ export function UserMenu() {
           )}
         </div>
 
-        <ConnectModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-        />
+        {isModalOpen && (
+          <ConnectModal isOpen onClose={() => setIsModalOpen(false)} />
+        )}
       </div>
     );
   }

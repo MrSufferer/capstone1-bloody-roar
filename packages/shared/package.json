@@ -9,7 +9,9 @@
     "./utils": "./src/utils/index.ts",
     "./escrow": "./src/escrow/index.ts",
     "./money": "./src/money.ts",
-    "./chain-guard": "./src/chain-guard.ts"
+    "./chain-guard": "./src/chain-guard.ts",
+    "./source-privacy": "./src/source-privacy.ts",
+    "./test-runner": "./src/test-runner.ts"
   },
   "devDependencies": {
     "typescript": "^5.5.2"

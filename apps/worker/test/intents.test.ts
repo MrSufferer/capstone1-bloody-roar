@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
@@ -6,8 +7,6 @@ import { encodeErrorResult } from "@bloody-roar/shared";
 import { ESCROW_ABI } from "@bloody-roar/shared/escrow";
 import { INTENT_DROP_AFTER_MS, failedTransactionReason, nextIntentState, reconcileIntents, type IntentView } from "../src/reconciler/intents";
 import { fakeRpc, newChain } from "./helpers";
-
-beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 
 const now = new Date("2027-01-01T12:00:00Z");
 const minutesAgo = (m: number) => new Date(now.getTime() - m * 60_000);
@@ -47,6 +46,8 @@ test("no receipt outcome ever sets CONFIRMED", () => {
   expect(outcomes.some((o) => o?.status === "CONFIRMED")).toBe(false);
 });
 
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
+beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 const userId = `intent_test_${Date.now()}`;
 afterAll(async () => {
   await prisma.transactionIntent.deleteMany({ where: { userId } });
@@ -124,4 +125,6 @@ test("approval confirms only a successful receipt addressed to its token at or b
   await reconcileIntents({ ...deps, rpc, config: { chainId: 84532, finality: "latest" } });
   expect(await status(later.id)).toBe("CONFIRMED");
   expect(tags).toEqual(["latest"]);
+});
+
 });

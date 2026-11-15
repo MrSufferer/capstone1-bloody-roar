@@ -79,6 +79,9 @@ describe("prepareSubmitWork", () => {
     const chain = { ...projection, escrowKey: "escrow-1", chainId: 31337, contractAddress: contract };
     const tx = { $queryRaw: vi.fn().mockResolvedValue([]), submission: { findUnique: vi.fn(async () => draft) },
       issue: { findUnique: vi.fn(async () => issue) }, escrowProjection: { findUnique: vi.fn(async () => chain) },
+      testCase: { findMany: vi.fn().mockResolvedValue([]) },
+      testRun: { findFirst: vi.fn().mockResolvedValue(null) },
+      attachment: { findMany: vi.fn().mockResolvedValue([]) },
       transactionIntent: { create: vi.fn(async () => ({ id: "intent" })) } };
     return { ...tx, draft, chain, tx, $transaction: vi.fn(async (fn: (value: typeof tx) => unknown) => fn(tx)) };
   }
