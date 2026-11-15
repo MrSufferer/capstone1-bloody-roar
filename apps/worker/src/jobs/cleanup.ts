@@ -7,6 +7,7 @@ import type { Job, JobContext } from "../runtime/scheduler";
 // Housekeeping (P1-35): drop expired or long-revoked sessions, abandoned uploads, and old webhook deliveries.
 async function runCleanup({ db, now }: JobContext): Promise<void> {
   const at = now();
+  await db.testRun.updateMany({ where: { status: "RUNNING", startedAt: { lt: new Date(at.getTime() - 20 * 60_000) } }, data: { status: "ERROR", log: "Worker stopped before the run finished", finishedAt: at } });
   const sessionCutoff = new Date(at.getTime() - 7 * DAY_MS);
   await db.session.deleteMany({
     where: { OR: [{ expiresAt: { lt: sessionCutoff } }, { revokedAt: { lt: sessionCutoff } }] },

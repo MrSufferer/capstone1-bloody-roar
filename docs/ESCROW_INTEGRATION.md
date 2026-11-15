@@ -34,8 +34,10 @@ six-decimal USDC token and the three distinct Safe roles documented in
    deadline, then confirms action `WORK`. Submission descriptions and PR records
    in the app are separate from this on-chain commitment.
 3. The client calls `releaseFunds`. A missed delivery permits a full refund
-   after the deadline. Delivered work permits release after the delivery deadline
-   plus seven days through `claimReviewTimeout`.
+   after the deadline. Delivered work permits release seven days after the latest
+   `submitWork` through `claimReviewTimeout` (`submittedAt + REVIEW_PERIOD`). A
+   resubmission starts a fresh seven-day review window. Existing deployments keep
+   their original contract behavior; this change requires a new deployment.
 4. Either participant may propose a settlement in basis points (0–10000 client
    share), revoke their own proposal, or accept the counterparty's proposal.
    A 10000-bps settlement is a mutual full refund. There is no `mutualCancel` or

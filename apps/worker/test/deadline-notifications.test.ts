@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import pino from "pino";
@@ -6,6 +7,8 @@ import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { NOTIFICATION_CREATED_CHANNEL, prisma } from "@bloody-roar/database";
 import { deadlinesJob } from "../src/jobs/deadlines";
 import type { JobContext } from "../src/runtime/scheduler";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const run = randomBytes(8).toString("hex");
 const address = () => `0x${randomBytes(20).toString("hex")}`;
@@ -49,4 +52,6 @@ test("deadline notices are sent once per participant when the job runs repeatedl
   await new Promise((resolve) => setTimeout(resolve, 100));
   const ids = new Set(notifications.map((notification) => notification.id));
   expect(received.filter((event) => ids.has(event.id))).toHaveLength(2);
+});
+
 });

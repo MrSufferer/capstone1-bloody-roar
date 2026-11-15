@@ -4,7 +4,6 @@
 
 import { create } from "zustand";
 import { apiClient, getApiErrorMessage } from "@/lib/api-client";
-import { tryChecksumAddress } from "@/lib/auth/address";
 import { createLoginMessage, type SiweLoginPayload } from "@/lib/auth/siwe";
 
 export { createLoginMessage } from "@/lib/auth/siwe";
@@ -120,6 +119,8 @@ export const useAuthStore = create<AuthState>()(
           const { data: loginPayload } = await apiClient.get<LoginPayload>("/api/auth/nonce", {
             params: { address: walletAddress },
           });
+          // ethers is large; load it only when someone signs in.
+          const { tryChecksumAddress } = await import("@/lib/auth/address");
           const checksumAddress = tryChecksumAddress(
             loginPayload.address || walletAddress,
           );
@@ -143,7 +144,7 @@ export const useAuthStore = create<AuthState>()(
           const { user } = data;
 
           if (!user) {
-            throw new Error("Dữ liệu phản hồi xác thực không hợp lệ.");
+            throw new Error("Invalid authentication response.");
           }
 
           set({
@@ -154,12 +155,12 @@ export const useAuthStore = create<AuthState>()(
 
           return true;
         } catch (err: unknown) {
-          const message = getApiErrorMessage(err, "Đã xảy ra lỗi trong quá trình đăng nhập.");
+          const message = getApiErrorMessage(err, "Something went wrong while signing in.");
           const errorMessage =
             message.includes("User rejected") ||
             message.includes("ACTION_REJECTED")
-              ? "Bạn đã từ chối ký xác thực trong ví."
-              : message || "Đã xảy ra lỗi trong quá trình đăng nhập.";
+              ? "You declined to sign the login request in your wallet."
+              : message || "Something went wrong while signing in.";
 
           set({
             status: "error",

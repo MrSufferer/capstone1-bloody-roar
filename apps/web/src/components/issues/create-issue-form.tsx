@@ -1,9 +1,13 @@
 "use client";
 
+import { useToastState } from "@/lib/toast";
 import { uploadFile } from "@/lib/upload";
+import { SkillPicker } from "@/components/ui/skill-picker";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import { ISSUE_CATEGORIES, ISSUE_DIFFICULTY, BOUNTY_MIN_AMOUNT, BOUNTY_MAX_AMOUNT } from "@bloody-roar/shared";
 import { graphqlRequest } from "@/lib/graphql-client";
 import { useAuthStore } from "@/lib/store/use-auth-store";
@@ -20,7 +24,6 @@ const CREATE_ISSUE = `mutation CreateIssue($input: CreateIssueInput!) {
 type Token = { id: string; symbol: string; name: string; decimals: number; chainId: number };
 type TokenResponse = { tokens: Token[] };
 const MAX_IMAGES = 4;
-const SEARCH_SKILLS = `query Skills($query: String, $first: Int) { skills(query: $query, first: $first) { id name } }`;
 const ATTACH_ISSUE_FILE = `mutation AttachIssueFile($issue: ID!, $attachment: ID!) { attachIssueFile(issueId: $issue, attachmentId: $attachment) { id } }`;
 
 type CreateResponse = { createIssue: { id: string; title: string; status: string } };
@@ -38,24 +41,13 @@ const CATEGORY_NAMES: Record<(typeof ISSUE_CATEGORIES)[number], string> = {
 };
 
 export function CreateIssueForm() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
   const authStatus = useAuthStore((state) => state.status);
-  const { language, t, theme } = useUiPreferences();
+  const { t, theme } = useUiPreferences();
 
-  const categoryNames =
-    language === "vi"
-      ? {
-          BUG_FIX: "Sửa lỗi",
-          FEATURE: "Tính năng",
-          SMART_CONTRACT: "Smart contract",
-          AUDIT: "Kiểm toán bảo mật",
-          UI_UX: "Giao diện",
-          DATA_SCIENCE: "Khoa học dữ liệu",
-          DEVOPS: "DevOps",
-          DOCUMENTATION: "Tài liệu",
-          OTHER: "Khác",
-        }
-      : CATEGORY_NAMES;
+  const categoryNames = CATEGORY_NAMES;
 
   const [tokens, setTokens] = useState<Token[]>([]);
   const [title, setTitle] = useState("");
@@ -63,7 +55,6 @@ export function CreateIssueForm() {
   const [category, setCategory] = useState<(typeof ISSUE_CATEGORIES)[number]>("BUG_FIX");
   const [amount, setAmount] = useState(100);
   const [tokenId, setTokenId] = useState("");
-  const [skillDraft, setSkillDraft] = useState("");
   const [skills, setSkills] = useState<string[]>([]);
   const [difficulty, setDifficulty] = useState<(typeof ISSUE_DIFFICULTY)[number] | "">("Hard");
   const [timeEstimate, setTimeEstimate] = useState("");
@@ -76,7 +67,7 @@ export function CreateIssueForm() {
   const [createdId, setCreatedId] = useState<string | null>(null);
   const previews = useMemo(() => imageFiles.map((file) => URL.createObjectURL(file)), [imageFiles]);
   useEffect(() => () => previews.forEach((url) => URL.revokeObjectURL(url)), [previews]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useToastState("error");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const validateField = (event: React.SyntheticEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -107,38 +98,12 @@ export function CreateIssueForm() {
     return () => {
       active = false;
     };
-  }, []);
-
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [suggestOpen, setSuggestOpen] = useState(false);
-  useEffect(() => {
-    let active = true;
-    const timer = setTimeout(() => {
-      graphqlRequest<{ skills: Array<{ name: string }> }>(SEARCH_SKILLS, { query: skillDraft.trim(), first: 8 })
-        .then((result) => { if (active) setSuggestions(result.skills.map((skill) => skill.name)); })
-        .catch(() => { if (active) setSuggestions([]); });
-    }, 150);
-    return () => { active = false; clearTimeout(timer); };
-  }, [skillDraft]);
-  const pickSkill = (name: string) => { addSkills(name); setSuggestOpen(false); };
+  }, [setError]);
 
   const addImages = (files: File[]) => {
     const picked = files.filter((file) => file.type.startsWith("image/") && file.size <= 5 * 1024 * 1024);
     if (picked.length < files.length) setError("Only images up to 5 MB can be attached.");
     setImageFiles((current) => [...current, ...picked].slice(0, MAX_IMAGES));
-  };
-
-  const addSkills = (value = skillDraft) => {
-    const next = value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    setSkills((current) => [...new Set([...current, ...next])].slice(0, 10));
-    setSkillDraft("");
-  };
-
-  const removeSkill = (skillToRemove: string) => {
-    setSkills((current) => current.filter((val) => val !== skillToRemove));
   };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -169,6 +134,7 @@ export function CreateIssueForm() {
         ...(githubRepo.trim() ? { githubRepo: githubRepo.trim() } : {}),
       };
       const result = await graphqlRequest<CreateResponse>(CREATE_ISSUE, { input });
+      void queryClient.invalidateQueries({ queryKey: ["marketplace-issues"] });
       // Images attach after the task exists: each upload is announced without an issue, then linked to it.
       setCreatedId(result.createIssue.id);
       const failed: string[] = [];
@@ -184,9 +150,9 @@ export function CreateIssueForm() {
         setError(`Bounty posted, but these images failed to upload: ${failed.join(", ")}. Open the bounty to continue.`);
         return;
       }
-      window.location.assign(`/issues/${result.createIssue.id}`);
+      router.push(`/issues/${result.createIssue.id}`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Không thể tạo bài toán.");
+      setError(reason instanceof Error ? reason.message : "Could not create the bounty.");
     } finally {
       setSaving(false);
     }
@@ -302,7 +268,7 @@ export function CreateIssueForm() {
         </li>
       </ol>
 
-      {error && <div className="err" role="alert">{error}{createdId && <> <Link href={`/issues/${createdId}`} style={{ textDecoration: "underline" }}>Open bounty</Link></>}</div>}
+      {error && createdId && <div className="err" role="alert">{error}{createdId && <> <Link href={`/issues/${createdId}`} style={{ textDecoration: "underline" }}>Open bounty</Link></>}</div>}
 
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {/* Section 1: Basics */}
@@ -371,62 +337,7 @@ export function CreateIssueForm() {
 
           <div className="field">
             <label htmlFor="required-skills">{t("skillsLabel")}</label>
-            <div style={{ position: "relative" }}>
-            <div className="taginput">
-              {skills.map((skill) => (
-                <span key={skill} className="tag">
-                  {skill}{" "}
-                  <button
-                    type="button"
-                    className="x"
-                    onClick={() => removeSkill(skill)}
-                    aria-label={`Remove ${skill}`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <input
-                id="required-skills"
-                value={skillDraft}
-                autoComplete="off"
-                role="combobox"
-                aria-expanded={suggestOpen && suggestions.length > 0}
-                aria-controls="skill-suggestions"
-                onChange={(e) => { setSkillDraft(e.target.value); setSuggestOpen(true); }}
-                onFocus={() => setSuggestOpen(true)}
-                onBlur={() => setTimeout(() => setSuggestOpen(false), 120)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === ",") {
-                    e.preventDefault();
-                    addSkills();
-                  }
-                }}
-                placeholder={skills.length ? "Add more, press Enter" : t("skillsPlaceholder")}
-              />
-              {skillDraft.trim() && (
-                <button
-                  type="button"
-                  className="btn btn-o btn-sm"
-                  onClick={() => addSkills()}
-                  style={{ height: 26, padding: "0 8px", fontSize: 11 }}
-                >
-                  <Plus className="h-3 w-3" /> Add
-                </button>
-              )}
-            </div>
-            {suggestOpen && suggestions.filter((name) => !skills.includes(name)).length > 0 && (
-              <ul id="skill-suggestions" role="listbox" style={{ position: "absolute", zIndex: 20, left: 0, right: 0, top: "100%", marginTop: 4, maxHeight: 240, overflowY: "auto", listStyle: "none", padding: 4, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.12)" }}>
-                {suggestions.filter((name) => !skills.includes(name)).map((name) => (
-                  <li key={name} role="option" aria-selected={false}>
-                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => pickSkill(name)} style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", borderRadius: 6, fontSize: 13, color: "var(--ink)", background: "transparent", cursor: "pointer" }} className="hover:bg-[var(--surface-2)]">
-                      {name}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            </div>
+            <SkillPicker id="required-skills" value={skills} onChange={setSkills} max={10} placeholder={t("skillsPlaceholder")} />
             <span className="hint">Up to 10 skills. Developers who match will be notified.</span>
           </div>
         </section>
@@ -523,6 +434,34 @@ export function CreateIssueForm() {
               </div>
             </div>
             {fieldErrors["issue-description"] && <span role="alert" className="err">{fieldErrors["issue-description"]}</span>}
+        <div style={{ marginTop: 12 }}>
+          <label style={{ fontSize: 13 }}>
+            Images (optional, up to {MAX_IMAGES})
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "block", marginTop: 6 }}
+              onChange={(e) => {
+                addImages(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
+            />
+          </label>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>Images only, 5 MB each. Paste a screenshot into the box above, or choose files. The first image is the cover in the marketplace.</p>
+          {previews.length > 0 && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              {previews.map((url, index) => (
+                <div key={url} style={{ position: "relative" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt={imageFiles[index]?.name ?? ""} style={{ width: 96, height: 72, objectFit: "cover", borderRadius: 6, border: "1px solid var(--line)" }} />
+                  <button type="button" aria-label="Remove image" onClick={() => setImageFiles((current) => current.filter((_, i) => i !== index))} style={{ position: "absolute", top: 2, right: 2, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 4, fontSize: 11, lineHeight: "16px", width: 18, cursor: "pointer" }}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
           </div>
         </section>
 
@@ -530,7 +469,6 @@ export function CreateIssueForm() {
         <section className="form">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>3 · Budget &amp; Deadlines</h2>
-            <span className="badge b-info">Base Sepolia</span>
           </div>
 
           <div className="two">
@@ -617,34 +555,6 @@ export function CreateIssueForm() {
             />
           </div>
         </section>
-
-        <div>
-          <label style={{ fontSize: 13 }}>
-            Images (optional, up to {MAX_IMAGES})
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: "block", marginTop: 6 }}
-              onChange={(e) => {
-                addImages(Array.from(e.target.files ?? []));
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>Images only, 5 MB each. You can also paste screenshots into the scope box. The first image is the cover in the marketplace.</p>
-          {previews.length > 0 && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-              {previews.map((url, index) => (
-                <div key={url} style={{ position: "relative" }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt={imageFiles[index]?.name ?? ""} style={{ width: 96, height: 72, objectFit: "cover", borderRadius: 6, border: "1px solid var(--line)" }} />
-                  <button type="button" aria-label="Remove image" onClick={() => setImageFiles((current) => current.filter((_, i) => i !== index))} style={{ position: "absolute", top: 2, right: 2, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 4, fontSize: 11, lineHeight: "16px", width: 18, cursor: "pointer" }}>×</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
 
         {/* Action Buttons */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8 }}>

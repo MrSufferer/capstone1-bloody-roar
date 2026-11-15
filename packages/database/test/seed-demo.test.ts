@@ -1,7 +1,10 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "../src/test-guard";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { prisma } from "../src/index";
 import { seedDemo } from "../src/seed-demo";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 beforeAll(async () => {
   assertTestDatabase(process.env.TEST_DATABASE_URL);
@@ -45,6 +48,13 @@ test("seedDemo is idempotent and conforms to architecture", async () => {
   expect(users1).toBe(users2);
   expect(issues1).toBe(issues2);
   expect(reviews1).toBe(reviews2);
+  const messages = await prisma.message.findMany({ include: { conversation: { include: { participants: true } } } });
+  expect(messages.length).toBeGreaterThan(0);
+  for (const message of messages) {
+    expect(message.conversation.kind).toBe("APPLICATION");
+    expect(message.conversation.participants.map((p) => p.userId)).toContain(message.senderId);
+    expect(message.conversation.lastMessageAt).not.toBeNull();
+  }
 
   // Không có issue nào ở IN_PROGRESS
   const inProgressCount = await prisma.issue.count({
@@ -91,4 +101,6 @@ test("seedDemo is idempotent and conforms to architecture", async () => {
 
 afterAll(async () => {
   await prisma.$disconnect();
+});
+
 });

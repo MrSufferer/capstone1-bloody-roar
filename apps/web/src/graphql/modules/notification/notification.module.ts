@@ -59,7 +59,7 @@ builder.mutationFields((t) => ({
         where: { id: String(args.id), userId: user.id },
         select: { id: true },
       });
-      if (!notification) throw gqlError("Thông báo không tồn tại", "NOT_FOUND");
+      if (!notification) throw gqlError("Notification not found", "NOT_FOUND");
       return ctx.db.notification.update({
         ...query,
         where: { id: notification.id },

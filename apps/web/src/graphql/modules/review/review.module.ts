@@ -40,10 +40,10 @@ builder.mutationField("submitReview", (t) =>
         where: { id: issueId },
         select: { clientId: true, developerId: true, status: true },
       });
-      if (!issue) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
-      if (issue.clientId !== user.id) throw gqlError("Chỉ khách hàng mới đánh giá được", "FORBIDDEN");
+      if (!issue) throw gqlError("Bounty not found", "NOT_FOUND");
+      if (issue.clientId !== user.id) throw gqlError("Only the client can leave a review", "FORBIDDEN");
       const developerId = issue.developerId;
-      if (issue.status !== "COMPLETED" || !developerId) throw gqlError("Chỉ đánh giá sau khi bài toán hoàn thành", "INVALID_STATE");
+      if (issue.status !== "COMPLETED" || !developerId) throw gqlError("You can review only after the bounty is completed", "INVALID_STATE");
 
       const comment = input.comment?.trim() ? (await guardMessage(input.comment, { issueId })).content : null;
       try {
@@ -56,7 +56,7 @@ builder.mutationField("submitReview", (t) =>
         });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")
-          throw gqlError("Bài toán đã có đánh giá", "CONFLICT");
+          throw gqlError("This bounty already has a review", "CONFLICT");
         throw error;
       }
     },

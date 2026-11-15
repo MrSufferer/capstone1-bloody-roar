@@ -1,6 +1,7 @@
 // apps/web/src/components/auth/connect-modal.tsx
 "use client";
 
+import { toast } from "@/lib/toast";
 import React, { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { X, AlertCircle } from "lucide-react";
@@ -40,7 +41,7 @@ export function ConnectModal({ isOpen, onClose }: ConnectModalProps) {
     if (option.type === "injected" || option.type === "coinbase") {
       try {
         if (!hasInjectedProvider(option.id)) {
-          alert(
+          toast.error(
             option.id === "coinbase"
               ? "Coinbase Wallet Extension not detected."
               : option.id === "metamask"
@@ -260,7 +261,7 @@ export function ConnectModal({ isOpen, onClose }: ConnectModalProps) {
 
                   <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
                     We never ask for your seed phrase. By signing in you accept the{" "}
-                    <a href="/#rules" style={{ color: "var(--link)" }}>
+                    <a href="/guide" style={{ color: "var(--link)" }}>
                       escrow rules
                     </a>
                     .
@@ -273,7 +274,7 @@ export function ConnectModal({ isOpen, onClose }: ConnectModalProps) {
                   <div className="how" style={{ fontSize: 13, lineHeight: 1.6 }}>
                     <b style={{ color: "var(--ink)" }}>Wallet-first identity</b>
                     <p style={{ margin: 0 }}>
-                      Social logins (Google, GitHub) cannot directly control smart contract escrow on Base Sepolia.
+                      Social logins (Google, GitHub) cannot directly control smart contract escrow.
                       Please connect your wallet first, then you can link GitHub from your profile settings.
                     </p>
                   </div>

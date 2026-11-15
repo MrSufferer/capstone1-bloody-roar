@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
@@ -5,18 +6,24 @@ import { prisma } from "@bloody-roar/database";
 import { expireReservations } from "../src/jobs/reservations";
 import pino from "pino";
 
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
+
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
-assertTestDatabase(process.env.TEST_DATABASE_URL);
 
 const run = Date.now();
 const now = new Date("2027-01-01T12:00:00Z");
 const log = pino({ level: "silent" });
 const hours = (h: number) => new Date(now.getTime() + h * 3_600_000);
 
-const client = await prisma.user.create({
-  data: { walletAddress: `0xres${run}`, updatedAt: now },
+let client: Awaited<ReturnType<typeof prisma.user.create>>;
+let token: Awaited<ReturnType<typeof prisma.token.create>>;
+let expiredIssue: Awaited<ReturnType<typeof prisma.issue.create>>, liveIssue: typeof expiredIssue;
+let expiredReservation: Awaited<ReturnType<typeof prisma.fundingReservation.create>>;
+beforeAll(async () => {
+  client = await prisma.user.create({
+    data: { walletAddress: `0xres${run}`, updatedAt: now },
 });
-const token = await prisma.token.create({
+token = await prisma.token.create({
   data: { symbol: "TST", name: "Test", address: `0xtok${run}`, decimals: 6, chainId: 1, updatedAt: now },
 });
 const makeIssue = (suffix: string) =>
@@ -32,8 +39,7 @@ const makeIssue = (suffix: string) =>
       updatedAt: now,
     },
   });
-const expiredIssue = await makeIssue("expired");
-const liveIssue = await makeIssue("live");
+
 
 const reservation = (issueId: string, suffix: string, expiresAt: Date) => ({
   issueId,
@@ -51,8 +57,11 @@ const reservation = (issueId: string, suffix: string, expiresAt: Date) => ({
   termsVersion: 1,
   expiresAt,
 });
-const expiredReservation = await prisma.fundingReservation.create({ data: reservation(expiredIssue.id, "a", hours(-1)) });
+expiredIssue = await makeIssue("expired");
+liveIssue = await makeIssue("live");
+expiredReservation = await prisma.fundingReservation.create({ data: reservation(expiredIssue.id, "a", hours(-1)) });
 await prisma.fundingReservation.create({ data: reservation(liveIssue.id, "b", hours(1)) });
+});
 
 afterAll(async () => {
   await prisma.fundingReservation.deleteMany({ where: { escrowKey: { startsWith: `br_${run}_` } } });
@@ -81,4 +90,6 @@ test("an unfunded reservation past its expiry is expired and its issue returns t
 test("running again changes nothing", async () => {
   expect(await expireReservations({ db: prisma, log, now: () => now })).toBe(0);
   expect(await prisma.notification.count({ where: { userId: client.id, type: "RESERVATION_EXPIRED" } })).toBe(1);
+});
+
 });

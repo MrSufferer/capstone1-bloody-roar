@@ -26,7 +26,7 @@ import { readFundingState } from "../../../lib/escrow/funding";
 const IntentStatusEnum = builder.enumType(IntentStatus, { name: "IntentStatus" });
 
 export const TransactionIntentRef = builder.prismaObject("TransactionIntent", {
-  description: "Giao dịch escrow do người dùng ký, theo dõi từ lúc chờ ký đến khi xác nhận",
+  description: "Escrow transaction signed by the user, tracked from awaiting signature to confirmation",
   fields: (t) => ({
     id: t.exposeID("id"),
     method: t.exposeString("method"),
@@ -41,19 +41,19 @@ export const TransactionIntentRef = builder.prismaObject("TransactionIntent", {
 });
 
 const SubmitFundingIntentSchema = z.object({
-  signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/, "Chữ ký không hợp lệ"),
-  nonce: z.string().regex(/^\d+$/, "Nonce phải là số nguyên").max(78),
+  signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/, "Invalid signature"),
+  nonce: z.string().regex(/^\d+$/, "Nonce must be an integer").max(78),
   intentExpiry: z.string().datetime(),
 });
 
-const TxHashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/, "Mã giao dịch không hợp lệ");
+const TxHashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/, "Invalid transaction hash");
 
 const unix = (date: Date) => BigInt(Math.floor(date.getTime() / 1000));
 
 // BE-32: client ký FundingIntent (QĐ-18). Chữ ký phải được recover về đúng ví của client.
 builder.mutationField("submitFundingIntent", (t) =>
   t.field({
-    description: "Client ký FundingIntent cho reservation, hạn ký tối đa 30 phút (BE-32)",
+    description: "Client signs a FundingIntent for the reservation, signing window at most 30 minutes (BE-32)",
     type: FundingReservationRef,
     args: {
       reservationId: t.arg.id({ required: true }),
@@ -71,20 +71,20 @@ builder.mutationField("submitFundingIntent", (t) =>
       const reservation = await ctx.db.fundingReservation.findUnique({
         where: { id: String(args.reservationId) },
       });
-      if (!reservation) throw gqlError("Reservation không tồn tại", "NOT_FOUND");
+      if (!reservation) throw gqlError("Reservation not found", "NOT_FOUND");
       if (reservation.clientId !== user.id)
-        throw gqlError("Chỉ khách hàng mới ký được ký quỹ", "FORBIDDEN");
+        throw gqlError("Only the client can sign the funding", "FORBIDDEN");
 
       const now = new Date();
       if (reservation.status !== ReservationStatus.AWAITING_FUNDING || reservation.expiresAt <= now)
-        throw gqlError("Reservation không còn chờ nạp ký quỹ", "RESERVATION_NOT_FUNDABLE");
+        throw gqlError("The reservation is no longer awaiting funding", "RESERVATION_NOT_FUNDABLE");
 
       const expiry = new Date(input.intentExpiry);
       if (
         expiry <= now ||
         expiry.getTime() > now.getTime() + ESCROW_CONSTANTS.INTENT_MINUTES * MINUTE_MS
       ) {
-        throw gqlError("Hạn ký phải trong vòng 30 phút tới", "INTENT_EXPIRY_INVALID");
+        throw gqlError("The signing deadline must be within the next 30 minutes", "INTENT_EXPIRY_INVALID");
       }
 
       const [client, developer] = await Promise.all([
@@ -116,10 +116,10 @@ builder.mutationField("submitFundingIntent", (t) =>
       try {
         signer = await recoverFundingIntentSigner(intent, input.signature as Hex);
       } catch {
-        throw gqlError("Chữ ký không hợp lệ", "INVALID_SIGNATURE");
+        throw gqlError("Invalid signature", "INVALID_SIGNATURE");
       }
       if (signer.toLowerCase() !== client.walletAddress.toLowerCase())
-        throw gqlError("Chữ ký không khớp ví của khách hàng", "INVALID_SIGNATURE");
+        throw gqlError("Signature does not match the client's wallet", "INVALID_SIGNATURE");
 
       try {
         return await ctx.db.fundingReservation.update({
@@ -132,7 +132,7 @@ builder.mutationField("submitFundingIntent", (t) =>
         });
       } catch (error) {
         if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002")
-          throw gqlError("Nonce này đã được dùng", "NONCE_USED");
+          throw gqlError("This nonce was already used", "NONCE_USED");
         throw error;
       }
     },
@@ -150,16 +150,16 @@ builder.mutationField("prepareEscrowDeposit", (t) =>
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       const reservation = await ctx.db.fundingReservation.findUnique({ where: { id: String(args.reservationId) } });
-      if (!reservation) throw gqlError("Reservation không tồn tại", "NOT_FOUND");
-      if (reservation.clientId !== user.id) throw gqlError("Chỉ khách hàng mới nạp ký quỹ", "FORBIDDEN");
+      if (!reservation) throw gqlError("Reservation not found", "NOT_FOUND");
+      if (reservation.clientId !== user.id) throw gqlError("Only the client can fund the escrow", "FORBIDDEN");
       const now = new Date();
       if (reservation.status !== ReservationStatus.AWAITING_FUNDING || reservation.expiresAt <= now)
-        throw gqlError("Reservation không còn chờ nạp ký quỹ", "RESERVATION_NOT_FUNDABLE");
+        throw gqlError("The reservation is no longer awaiting funding", "RESERVATION_NOT_FUNDABLE");
       if (!reservation.intentSignature || !reservation.intentNonce || !reservation.intentExpiresAt || reservation.intentExpiresAt <= now)
-        throw gqlError("FundingIntent chưa được ký hoặc đã hết hạn", "FUNDING_INTENT_INVALID");
+        throw gqlError("FundingIntent is unsigned or has expired", "FUNDING_INTENT_INVALID");
       const target = escrowTarget();
       if (reservation.chainId !== target.chainId || reservation.contractAddress.toLowerCase() !== target.contractAddress.toLowerCase())
-        throw gqlError("Reservation không khớp cấu hình escrow", "ESCROW_CHAIN_MISMATCH");
+        throw gqlError("Reservation does not match the escrow configuration", "ESCROW_CHAIN_MISMATCH");
       const [client, developer] = await Promise.all([
         ctx.db.user.findUniqueOrThrow({ where: { id: reservation.clientId }, select: { walletAddress: true } }),
         ctx.db.user.findUniqueOrThrow({ where: { id: reservation.developerId }, select: { walletAddress: true } }),
@@ -170,18 +170,18 @@ builder.mutationField("prepareEscrowDeposit", (t) =>
         amount: BigInt(reservation.amountRaw.toFixed()), deliveryDeadline: unix(reservation.deliveryDeadline),
         termsHash: reservation.termsHash as Hex, intentExpiry: unix(reservation.intentExpiresAt), nonce: BigInt(reservation.intentNonce),
       };
-      if (intent.amount <= 0n) throw gqlError("Số tiền ký quỹ không hợp lệ", "FUNDING_INTENT_INVALID");
+      if (intent.amount <= 0n) throw gqlError("Invalid escrow amount", "FUNDING_INTENT_INVALID");
       let signer: Hex;
       try { signer = await recoverFundingIntentSigner(intent, reservation.intentSignature as Hex); }
-      catch { throw gqlError("FundingIntent không hợp lệ", "FUNDING_INTENT_INVALID"); }
+      catch { throw gqlError("Invalid FundingIntent", "FUNDING_INTENT_INVALID"); }
       if (signer.toLowerCase() !== client.walletAddress.toLowerCase() || user.walletAddress.toLowerCase() !== client.walletAddress.toLowerCase())
-        throw gqlError("FundingIntent không khớp ví khách hàng", "FUNDING_INTENT_INVALID");
+        throw gqlError("FundingIntent does not match the client's wallet", "FUNDING_INTENT_INVALID");
       const chain = await readFundingState({ chainId: target.chainId, contractAddress: target.contractAddress,
         tokenAddress: reservation.tokenAddress as Hex, clientAddress: client.walletAddress as Hex });
-      if (chain.token.toLowerCase() !== reservation.tokenAddress.toLowerCase()) throw gqlError("Token không khớp escrow contract", "INVALID_TOKEN");
-      if (chain.paused) throw gqlError("Escrow đang tạm dừng", "ESCROW_PAUSED");
-      if (chain.blockTimestamp >= intent.deliveryDeadline) throw gqlError("Hạn giao hàng đã kết thúc", "DELIVERY_DEADLINE_INVALID");
-      if (chain.balance < intent.amount) throw gqlError("Số dư token không đủ", "INSUFFICIENT_BALANCE");
+      if (chain.token.toLowerCase() !== reservation.tokenAddress.toLowerCase()) throw gqlError("Token does not match the escrow contract", "INVALID_TOKEN");
+      if (chain.paused) throw gqlError("Escrow is paused", "ESCROW_PAUSED");
+      if (chain.blockTimestamp >= intent.deliveryDeadline) throw gqlError("The delivery deadline has passed", "DELIVERY_DEADLINE_INVALID");
+      if (chain.balance < intent.amount) throw gqlError("Insufficient token balance", "INSUFFICIENT_BALANCE");
       const expiry = new Date(Math.min(reservation.expiresAt.getTime(), reservation.intentExpiresAt.getTime(), now.getTime() + ESCROW_CONSTANTS.INTENT_MINUTES * MINUTE_MS));
       return ctx.db.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM funding_reservations WHERE id = ${reservation.id} FOR UPDATE`;
@@ -196,7 +196,7 @@ builder.mutationField("prepareEscrowDeposit", (t) =>
             fresh.tokenAddress !== reservation.tokenAddress || fresh.amountRaw.toFixed() !== reservation.amountRaw.toFixed() ||
             fresh.deliveryDeadline.getTime() !== reservation.deliveryDeadline.getTime() || fresh.termsHash !== reservation.termsHash ||
             !issue || issue.status !== "AWAITING_FUNDING" || issue.termsVersion !== reservation.termsVersion)
-          throw gqlError("Reservation hoặc điều khoản đã thay đổi", "RESERVATION_NOT_FUNDABLE");
+          throw gqlError("The reservation or its terms changed", "RESERVATION_NOT_FUNDABLE");
         const steps: PreparedCall[] = [];
         if (chain.allowance < intent.amount) {
           const approvalArgs = { spender: target.contractAddress, amount: intent.amount.toString() };
@@ -218,7 +218,7 @@ builder.mutationField("prepareEscrowDeposit", (t) =>
 // BE-35: sau khi ví gửi giao dịch, ghi txHash. Không đặt CONFIRMED ở đây.
 builder.mutationField("recordTransactionSubmitted", (t) =>
   t.field({
-    description: "Ghi mã giao dịch sau khi ví đã gửi lên chain (AWAITING_SIGNATURE → SUBMITTED)",
+    description: "Record the transaction hash after the wallet submitted it (AWAITING_SIGNATURE → SUBMITTED)",
     type: TransactionIntentRef,
     args: {
       intentId: t.arg.id({ required: true }),
@@ -231,11 +231,11 @@ builder.mutationField("recordTransactionSubmitted", (t) =>
         where: { id: String(args.intentId) },
       });
       if (!intent || intent.userId !== user.id)
-        throw gqlError("Giao dịch không tồn tại", "NOT_FOUND");
+        throw gqlError("Transaction not found", "NOT_FOUND");
       if (intent.status !== IntentStatus.AWAITING_SIGNATURE)
-        throw gqlError("Giao dịch không ở trạng thái chờ ký", "INTENT_NOT_SUBMITTABLE");
+        throw gqlError("Transaction is not awaiting a signature", "INTENT_NOT_SUBMITTABLE");
       if (intent.expiresAt <= new Date())
-        throw gqlError("Giao dịch đã hết hạn", "INTENT_EXPIRED");
+        throw gqlError("Transaction has expired", "INTENT_EXPIRED");
 
       try {
         const moved = await ctx.db.transactionIntent.updateMany({
@@ -243,10 +243,10 @@ builder.mutationField("recordTransactionSubmitted", (t) =>
           data: { status: IntentStatus.SUBMITTED, txHash, submittedAt: new Date() },
         });
         if (moved.count !== 1)
-          throw gqlError("Giao dịch vừa đổi trạng thái", "INTENT_NOT_SUBMITTABLE");
+          throw gqlError("Transaction status just changed", "INTENT_NOT_SUBMITTABLE");
       } catch (error) {
         if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002")
-          throw gqlError("Mã giao dịch này đã được ghi nhận", "TX_HASH_USED");
+          throw gqlError("This transaction hash was already recorded", "TX_HASH_USED");
         throw error;
       }
       return ctx.db.transactionIntent.findUniqueOrThrow({ where: { id: intent.id } });
@@ -256,7 +256,7 @@ builder.mutationField("recordTransactionSubmitted", (t) =>
 
 builder.queryField("myTransactions", (t) =>
   t.field({
-    description: "Giao dịch escrow của người dùng, mới nhất trước",
+    description: "The user's escrow transactions, newest first",
     type: [TransactionIntentRef],
     resolve: (_root, _args, ctx) => {
       const user = requireAuth(ctx);

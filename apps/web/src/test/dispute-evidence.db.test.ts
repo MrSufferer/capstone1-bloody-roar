@@ -34,8 +34,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("dispute evidence on test databa
     await prisma.escrowProjection.create({ data: { issueId, escrowKey: `evidence-${issueId}`, escrowIdHash, chainId: 31337, contractAddress: contract, client: client.walletAddress, developer: developer.walletAddress, arbiter: hex(20), feeRecipient: hex(20), amountRaw: "100000000", depositedAt: clock.now, deliveryDeadline: clock.now, reviewDeadline: clock.now, termsHash: hex(32), phase: "FUNDED", lastProjectedBlock: 1n } });
     attachmentId = (await prisma.attachment.create({ data: { issueId, uploaderId: client.id, fileName: "proof.txt", fileUrl: "/proof.txt", fileSize: 5, fileMime: "text/plain", purpose: "EVIDENCE", status: "ATTACHED", sha256: hash("proof") } })).id;
     invalidId = (await prisma.attachment.create({ data: { issueId, uploaderId: developer.id, fileName: "wrong.txt", fileUrl: "/wrong.txt", fileSize: 5, fileMime: "text/plain", purpose: "EVIDENCE", status: "ATTACHED", sha256: hash("proof") } })).id;
-    message1 = (await prisma.message.create({ data: { issueId, senderId: client.id, content: "first message", createdAt: new Date("2029-12-31T00:00:00Z") } })).id;
-    message2 = (await prisma.message.create({ data: { issueId, senderId: developer.id, content: "second message", createdAt: new Date("2029-12-31T00:01:00Z") } })).id;
+    const conversation = await prisma.conversation.create({ data: { issueId, kind: "ISSUE_WORK", participants: { create: [{ userId: client.id, role: "CLIENT" }, { userId: developer.id, role: "DEVELOPER" }] } } });
+    message1 = (await prisma.message.create({ data: { issueId, conversationId: conversation.id, senderId: client.id, content: "first message", createdAt: new Date("2029-12-31T00:00:00Z") } })).id;
+    message2 = (await prisma.message.create({ data: { issueId, conversationId: conversation.id, senderId: developer.id, content: "second message", createdAt: new Date("2029-12-31T00:01:00Z") } })).id;
   }, 60_000);
   afterAll(async () => {
     for (const key of keys) { const file = localUploadPath(key); if (file) await unlink(file.destination).catch(() => {}); }

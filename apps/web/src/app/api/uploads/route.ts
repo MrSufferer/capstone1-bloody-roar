@@ -7,6 +7,8 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ALLOWED_FILE_TYPES, MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
 import { tokenFromRequest, verifyJWT } from "@/lib/auth";
 import { prisma, type AttachmentPurpose } from "@bloody-roar/database";
+import { accessibleConversation } from "@/lib/conversations";
+import { canReadConversation } from "@/lib/chat-access";
 import { canReadIssueChat } from "@/lib/chat-access";
 import { getS3Storage, localUploadPath } from "@/lib/storage";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
@@ -16,8 +18,10 @@ export const dynamic = "force-dynamic";
 
 const FILE_NAME_LIMIT = 160;
 const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+// The browser shrinks avatars to 256px WebP (~20 KB); anything bigger or in another format is refused.
+const PROFILE_AVATAR_MAX_BYTES = 256 * 1024;
 // CHAT is deliberately absent: chat attachments travel through the socket message flow.
-const UPLOAD_PURPOSES = ["ISSUE_IMAGE", "DELIVERY", "EVIDENCE", "AVATAR"] as const;
+const UPLOAD_PURPOSES = ["ISSUE_IMAGE", "DELIVERY", "EVIDENCE", "AVATAR", "COMMENT_IMAGE", "SOURCE", "CHAT"] as const;
 type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
 const ISSUE_SELECT = { id: true, clientId: true, developerId: true, status: true, hiddenAt: true } as const;
@@ -44,6 +48,7 @@ export async function POST(request: Request) {
     fileSize?: number;
     purpose?: string;
     issueId?: string;
+    conversationId?: string;
   } | null;
   const fileName = typeof body?.fileName === "string" ? safeFileName(body.fileName) : "";
   const fileType = body?.fileType;
@@ -62,22 +67,35 @@ export async function POST(request: Request) {
   if (typeof purpose !== "string" || !UPLOAD_PURPOSES.includes(purpose as UploadPurpose)) {
     return NextResponse.json({ error: "Upload purpose is not supported" }, { status: 400 });
   }
-  if (purpose === "AVATAR" && (!fileType.startsWith("image/") || fileSize > AVATAR_MAX_BYTES)) {
-    return NextResponse.json({ error: "Avatars must be images up to 5 MB" }, { status: 400 });
+  if ((purpose === "AVATAR" || purpose === "COMMENT_IMAGE") && (!fileType.startsWith("image/") || fileSize > AVATAR_MAX_BYTES)) {
+    return NextResponse.json({ error: "Avatars and comment pictures must be images up to 5 MB" }, { status: 400 });
+  }
+
+  if (purpose === "AVATAR" && (!["image/webp", "image/jpeg", "image/png"].includes(fileType) || fileSize > PROFILE_AVATAR_MAX_BYTES)) {
+    return NextResponse.json({ error: "Avatars must be a JPG, PNG or WebP image up to 256 KB" }, { status: 400 });
   }
 
   // Delivery and evidence belong to one task; only its client or developer may attach them.
   let issueId: string | null = null;
-  if (purpose === "DELIVERY" || purpose === "EVIDENCE") {
+  if (purpose === "DELIVERY" || purpose === "EVIDENCE" || purpose === "SOURCE") {
     if (typeof body?.issueId !== "string" || !body.issueId)
       return NextResponse.json({ error: "issueId is required for this upload" }, { status: 400 });
     const issue = await prisma.issue.findUnique({
       where: { id: body.issueId },
-      select: { clientId: true, developerId: true },
+      select: { clientId: true, developerId: true, status: true },
     });
     if (!issue || (issue.clientId !== user.id && issue.developerId !== user.id))
       return NextResponse.json({ error: "You cannot upload to this task" }, { status: 403 });
+    if (purpose === "SOURCE" && (issue.clientId !== user.id || issue.status !== "OPEN" || fileType !== "application/zip"))
+      return NextResponse.json({ error: "Only the owner of an open task can upload source ZIPs" }, { status: 403 });
     issueId = body.issueId;
+  }
+
+  let conversationId: string | null = null;
+  if (purpose === "CHAT") {
+    if (!body?.conversationId) return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
+    try { const room = await accessibleConversation(prisma, body.conversationId, user, true); conversationId = room.id; issueId = room.issueId; }
+    catch { return NextResponse.json({ error: "You cannot upload to this conversation" }, { status: 403 }); }
   }
 
   const key = `${user.id}/${randomUUID()}-${fileName}`;
@@ -91,6 +109,7 @@ export async function POST(request: Request) {
   const attachment = await prisma.attachment.create({
     data: {
       issueId,
+      conversationId,
       uploaderId: user.id,
       fileName,
       fileUrl,
@@ -163,6 +182,7 @@ async function canDownload(
 ): Promise<boolean> {
   switch (attachment.purpose) {
     case "AVATAR":
+    case "COMMENT_IMAGE":
       return true;
     case "ISSUE_IMAGE":
       if (!attachment.issueId) return Boolean(user && user.id === attachment.uploaderId);
@@ -170,6 +190,8 @@ async function canDownload(
       // A hidden task keeps its images for the people who can still open the task.
       if (!issue.hiddenAt) return true;
       return Boolean(user && (user.role === "ADMIN" || issue.clientId === user.id || issue.developerId === user.id));
+    case "SOURCE":
+      return Boolean(user && issue && (issue.clientId === user.id || issue.developerId === user.id));
     case "DELIVERY":
       return Boolean(user && issue && (issue.clientId === user.id || issue.developerId === user.id));
     case "EVIDENCE": {
@@ -193,9 +215,11 @@ export async function GET(request: Request) {
   const storedPath = `/api/uploads?key=${encodeURIComponent(key)}`;
   const attachment = await prisma.attachment.findFirst({
     where: { fileUrl: { endsWith: storedPath } },
+    orderBy: { messageId: { sort: "asc", nulls: "last" } },
     include: {
       issue: { select: ISSUE_SELECT },
-      message: { select: { issue: { select: ISSUE_SELECT } } },
+      conversation: { include: { issue: true, application: true, participants: true } },
+      message: { select: { issue: { select: ISSUE_SELECT }, conversation: { include: { issue: true, application: true, participants: true } } } },
     },
   });
   if (!attachment || !key.startsWith(`${attachment.uploaderId}/`)) {
@@ -207,7 +231,9 @@ export async function GET(request: Request) {
   }
 
   const issue = attachment.message?.issue ?? attachment.issue;
-  if (!(await canDownload(attachment, issue, user))) {
+  const conversation = attachment.message?.conversation ?? attachment.conversation;
+  const allowed = conversation ? Boolean(user && canReadConversation(conversation, conversation.issue, conversation.application, user, conversation.participants.some((p) => p.userId === user.id))) : await canDownload(attachment, issue, user);
+  if (!allowed) {
     if (!user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     return NextResponse.json({ error: "You cannot access this attachment" }, { status: 403 });
   }

@@ -1,11 +1,15 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphQLRequestError } from "../lib/graphql-client";
 import { TestCasePanel } from "../components/issues/test-case-panel";
+import { Toaster } from "../components/ui/toaster";
+import { useToastStore } from "../lib/toast";
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("../lib/graphql-client", async (importOriginal) => ({ ...(await importOriginal<object>()), graphqlRequest: request }));
+
+beforeEach(() => useToastStore.setState({ items: [] }));
 
 describe("manual acceptance criteria", () => {
   it("offers manual entry when AI is unavailable and creates, approves and deletes a criterion", async () => {
@@ -18,9 +22,9 @@ describe("manual acceptance criteria", () => {
       if (query.includes("DeleteTestCase")) return { deleteTestCase: true };
       throw new Error(`Unexpected query: ${query}`);
     });
-    render(<TestCasePanel issueId="issue1" owner issueStatus="OPEN" />);
+    render(<><TestCasePanel issueId="issue1" owner issueStatus="OPEN" /><Toaster /></>);
     fireEvent.click(await screen.findByText("Generate with AI"));
-    expect(await screen.findByText("AI chưa bật, hãy thêm tiêu chí thủ công")).toBeInTheDocument();
+    expect(await screen.findByText("AI is not enabled. Add criteria manually.")).toBeInTheDocument();
     for (const [label, value] of Object.entries({ title: item.title, description: item.description, given: item.given, when: item.when, then: item.bddThen })) {
       fireEvent.change(screen.getByLabelText(`New criterion ${label}`), { target: { value } });
     }
@@ -40,7 +44,7 @@ describe("manual acceptance criteria", () => {
 
 it("shows a load error instead of claiming criteria are empty", async () => {
   request.mockRejectedValueOnce(new Error("Unexpected error."));
-  render(<TestCasePanel issueId="issue1" owner issueStatus="OPEN" />);
+  render(<><TestCasePanel issueId="issue1" owner issueStatus="OPEN" /><Toaster /></>);
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not load acceptance criteria");
   expect(screen.queryByText("No acceptance criteria have been added yet.")).not.toBeInTheDocument();
 });

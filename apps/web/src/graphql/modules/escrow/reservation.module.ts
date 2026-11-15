@@ -23,7 +23,7 @@ const ReservationStatusEnum = builder.enumType(ReservationStatus, {
 });
 
 export const FundingReservationRef = builder.prismaObject("FundingReservation", {
-  description: "Chỗ giữ ký quỹ cho một ứng viên đã được chọn",
+  description: "Escrow reservation for a selected applicant",
   fields: (t) => ({
     id: t.exposeID("id"),
     issueId: t.exposeString("issueId"),
@@ -57,7 +57,7 @@ export const FundingReservationRef = builder.prismaObject("FundingReservation", 
 
 builder.queryField("reservation", (t) =>
   t.field({
-    description: "Reservation đang hoạt động của một bài toán (chỉ client hoặc developer)",
+    description: "Active reservation of a bounty (client or developer only)",
     type: FundingReservationRef,
     nullable: true,
     args: { issueId: t.arg.id({ required: true }) },
@@ -77,7 +77,7 @@ builder.queryField("reservation", (t) =>
 
 builder.queryField("myReservations", (t) =>
   t.field({
-    description: "Reservation mà người dùng là client hoặc developer, mới nhất trước",
+    description: "Reservations where the user is client or developer, newest first",
     type: [FundingReservationRef],
     resolve: (_root, _args, ctx) => {
       const user = requireAuth(ctx);

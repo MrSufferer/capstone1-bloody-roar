@@ -29,7 +29,7 @@ describe("walletSigner (K3)", () => {
   it("refuses to sign when the selected wallet account differs from the signed-in account", async () => {
     injectWallet(SELECTED);
 
-    await expect(walletSigner(SIGNED_IN)).rejects.toThrow("khác tài khoản đăng nhập");
+    await expect(walletSigner(SIGNED_IN)).rejects.toThrow("not the signed-in account");
   });
 
   it("returns a signer when the selected account matches, ignoring case", async () => {

@@ -1,7 +1,11 @@
+import { ensureWorkConversation } from "./conversations";
 // packages/database/src/seed-demo.ts
 // Extensive realistic demo seed script for Bloody-Roar Bounty Marketplace
 // Usage: bun run src/seed-demo.ts
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as zlib from "node:zlib";
 import {
   prisma,
   PrismaClient,
@@ -25,6 +29,9 @@ export interface SeedDemoSummary {
   comments: number;
   messages: number;
   notifications: number;
+  addedComments: number;
+  addedApplications: number;
+  addedAttachments: number;
 }
 
 export const HARDHAT_DEMO_WALLETS = {
@@ -65,33 +72,171 @@ export function guardDatabaseUrl(url: string | undefined): string {
   if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
     throw new Error("DATABASE_URL must be postgresql");
   }
-  if (!["localhost", "127.0.0.1"].includes(parsed.hostname)) {
-    throw new Error("DATABASE_URL must point to localhost or 127.0.0.1");
+  return decodeURIComponent(parsed.pathname.slice(1)) || "postgres";
+}
+
+function getUploadsDir(): string {
+  const cwd = process.cwd();
+  if (path.basename(cwd) === "database" && path.basename(path.dirname(cwd)) === "packages") {
+    return path.resolve(cwd, "../../apps/web/.uploads");
   }
-  const dbName = decodeURIComponent(parsed.pathname.slice(1));
-  if (dbName !== "bloody_codex_local" && !dbName.endsWith("_test")) {
-    throw new Error(`Database name '${dbName}' is not bloody_codex_local or ending in _test`);
+  return path.resolve(cwd, "apps/web/.uploads");
+}
+
+function createDiagramPng(width: number, height: number, theme: "terminal" | "architecture" | "diff" | "topology"): Buffer {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.writeUInt8(8, 8);
+  ihdr.writeUInt8(2, 9);
+  ihdr.writeUInt8(0, 10);
+  ihdr.writeUInt8(0, 11);
+  ihdr.writeUInt8(0, 12);
+
+  function chunk(type: string, data: Buffer): Buffer {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const t = Buffer.from(type, "ascii");
+    const crc = Buffer.alloc(4);
+    const toCrc = Buffer.concat([t, data]);
+    let c = 0xffffffff;
+    for (let i = 0; i < toCrc.length; i++) {
+      c ^= toCrc[i]!;
+      for (let j = 0; j < 8; j++) c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0);
+    }
+    crc.writeUInt32BE((c ^ 0xffffffff) >>> 0, 0);
+    return Buffer.concat([len, t, data, crc]);
   }
-  return dbName;
+
+  const rowLen = 1 + width * 3;
+  const raw = Buffer.alloc(height * rowLen);
+
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * rowLen;
+    raw[rowStart] = 0;
+    for (let x = 0; x < width; x++) {
+      const px = rowStart + 1 + x * 3;
+      const isBorder = (x < 2 || x >= width - 2 || y < 2 || y >= height - 2);
+      const isHeader = (y >= 2 && y <= 24);
+      if (isBorder) {
+        raw[px] = 63; raw[px + 1] = 63; raw[px + 2] = 70;
+      } else if (isHeader) {
+        raw[px] = 39; raw[px + 1] = 39; raw[px + 2] = 42;
+      } else {
+        if (theme === "terminal") {
+          if (y >= 35 && y <= 45 && x >= 20 && x <= 220) {
+            raw[px] = 220; raw[px + 1] = 38; raw[px + 2] = 38;
+          } else if ((y >= 60 && y <= 66 && x >= 30 && x <= 320) ||
+                     (y >= 80 && y <= 86 && x >= 30 && x <= 280) ||
+                     (y >= 100 && y <= 106 && x >= 50 && x <= 240) ||
+                     (y >= 120 && y <= 126 && x >= 30 && x <= 300)) {
+            raw[px] = 161; raw[px + 1] = 161; raw[px + 2] = 170;
+          } else {
+            raw[px] = 15; raw[px + 1] = 15; raw[px + 2] = 18;
+          }
+        } else if (theme === "architecture") {
+          const box1 = (x >= 20 && x <= 120 && y >= 50 && y <= 110);
+          const box2 = (x >= 160 && x <= 260 && y >= 50 && y <= 110);
+          const box3 = (x >= 300 && x <= 400 && y >= 50 && y <= 110);
+          const arrow1 = (x >= 120 && x <= 160 && y >= 78 && y <= 82);
+          const arrow2 = (x >= 260 && x <= 300 && y >= 78 && y <= 82);
+          if (box1) { raw[px] = 37; raw[px + 1] = 99; raw[px + 2] = 235; }
+          else if (box2) { raw[px] = 13; raw[px + 1] = 148; raw[px + 2] = 136; }
+          else if (box3) { raw[px] = 124; raw[px + 1] = 58; raw[px + 2] = 237; }
+          else if (arrow1 || arrow2) { raw[px] = 244; raw[px + 1] = 244; raw[px + 2] = 245; }
+          else { raw[px] = 24; raw[px + 1] = 24; raw[px + 2] = 27; }
+        } else if (theme === "diff") {
+          if (y >= 40 && y <= 55 && x >= 20 && x <= 380) {
+            raw[px] = 127; raw[px + 1] = 29; raw[px + 2] = 29;
+          } else if (y >= 65 && y <= 80 && x >= 20 && x <= 380) {
+            raw[px] = 20; raw[px + 1] = 83; raw[px + 2] = 45;
+          } else if ((y >= 95 && y <= 101 && x >= 20 && x <= 300) ||
+                     (y >= 110 && y <= 116 && x >= 20 && x <= 260)) {
+            raw[px] = 113; raw[px + 1] = 113; raw[px + 2] = 122;
+          } else {
+            raw[px] = 18; raw[px + 1] = 18; raw[px + 2] = 20;
+          }
+        } else {
+          const b1 = (x >= 30 && x <= 110 && y >= 40 && y <= 80);
+          const b2 = (x >= 140 && x <= 220 && y >= 40 && y <= 80);
+          const b3 = (x >= 250 && x <= 330 && y >= 40 && y <= 80);
+          const b4 = (x >= 80 && x <= 280 && y >= 110 && y <= 150);
+          if (b1 || b2 || b3) { raw[px] = 59; raw[px + 1] = 130; raw[px + 2] = 246; }
+          else if (b4) { raw[px] = 16; raw[px + 1] = 185; raw[px + 2] = 129; }
+          else { raw[px] = 20; raw[px + 1] = 20; raw[px + 2] = 24; }
+        }
+      }
+    }
+  }
+
+  const idat = chunk("IDAT", zlib.deflateSync(raw));
+  return Buffer.concat([signature, chunk("IHDR", ihdr), idat, chunk("IEND", Buffer.alloc(0))]);
 }
 
 export async function seedDemo(db: PrismaClient): Promise<SeedDemoSummary> {
   const chainId = Number(process.env.CHAIN_ID ?? "31337");
-  const usdc = await db.token.findFirst({
-    where: {
-      chainId,
-      symbol: "USDC",
-      isActive: true,
-    },
-  });
+  const usdc =
+    (await db.token.findFirst({
+      where: {
+        chainId,
+        symbol: { in: ["USDC", "mUSDC"] },
+        isActive: true,
+      },
+    })) ??
+    (await db.token.findFirst({
+      where: {
+        symbol: { in: ["USDC", "mUSDC"] },
+        isActive: true,
+      },
+    })) ??
+    (await db.token.findFirst({
+      where: {
+        isActive: true,
+      },
+    }));
   if (!usdc) {
-    throw new Error(`Chưa có token USDC cho chain ${chainId}. Chạy deploy local và db:seed trước.`);
+    throw new Error(`Chưa có token active cho chain ${chainId}. Chạy deploy local và db:seed trước.`);
   }
 
-  // -------------------------------------------------------------------------
-  // 1. Users (Admin, 3 Clients, 4 Developers)
-  // -------------------------------------------------------------------------
-  const wallets = chainId === 31337 ? HARDHAT_DEMO_WALLETS : DEFAULT_DEMO_WALLETS;
+  const existingOpenIssues = await db.issue.findMany({
+    where: { status: IssueStatus.OPEN, hiddenAt: null, isDraft: false },
+    select: {
+      id: true,
+      title: true,
+      category: true,
+      bountyAmount: true,
+      _count: { select: { comments: true, applications: true } },
+      client: { select: { id: true, name: true } },
+    },
+    orderBy: { bountyAmount: "desc" },
+  });
+
+  const existingUsers = await db.user.findMany({
+    select: { id: true, name: true, role: true, walletAddress: true },
+    orderBy: [{ role: "asc" }, { name: "asc" }],
+  });
+
+  console.log(`\n========================================================`);
+  console.log(`🔍 [READ-ONLY INSPECTION] Pre-Seed Database Summary:`);
+  console.log(
+    `   Total Users: ${existingUsers.length} (Admins: ${existingUsers.filter((u) => u.role === UserRole.ADMIN).length}, Clients: ${existingUsers.filter((u) => u.role === UserRole.CLIENT).length}, Developers: ${existingUsers.filter((u) => u.role === UserRole.DEVELOPER).length})`,
+  );
+  console.log(`   Total Open Non-Draft Non-Hidden Issues: ${existingOpenIssues.length}`);
+  console.log(`========================================================\n`);
+
+  let baselineApplications = 0;
+  let baselineSubmissions = 0;
+  let baselineReviews = 0;
+  let baselineComments = 0;
+  let baselineMessages = 0;
+  let baselineNotifications = 0;
+
+  if (existingOpenIssues.length === 0) {
+    // -------------------------------------------------------------------------
+    // 1. Users (Admin, 3 Clients, 4 Developers)
+    // -------------------------------------------------------------------------
+    const wallets = chainId === 31337 ? HARDHAT_DEMO_WALLETS : DEFAULT_DEMO_WALLETS;
 
   if (chainId === 31337) {
     const oldAddresses = Object.values(DEFAULT_DEMO_WALLETS);
@@ -873,11 +1018,24 @@ Identified potential read-only reentrancy during reward settlement when external
   ];
 
   for (const msg of messagesData) {
+    const chatIssue = await db.issue.findUniqueOrThrow({ where: { id: msg.issueId } });
+    const chatRoom = await db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM issues WHERE id = ${chatIssue.id} FOR UPDATE`;
+      if (chatIssue.developerId) return ensureWorkConversation(tx, chatIssue);
+      const developerId = messagesData.find((row) => row.issueId === chatIssue.id && row.senderId !== chatIssue.clientId)!.senderId;
+      const application = await tx.application.findUniqueOrThrow({ where: { issueId_developerId: { issueId: chatIssue.id, developerId } } });
+      return tx.conversation.upsert({ where: { applicationId: application.id }, update: {}, create: {
+        kind: "APPLICATION", issueId: chatIssue.id, applicationId: application.id,
+        participants: { create: [{ userId: chatIssue.clientId, role: "CLIENT" }, { userId: developerId, role: "APPLICANT" }] },
+      } });
+    });
     await db.message.upsert({
       where: { id: msg.id },
-      update: { content: msg.content },
-      create: msg,
+      update: { content: msg.content, conversationId: chatRoom.id },
+      create: { ...msg, conversationId: chatRoom.id },
     });
+    const latest = await db.message.aggregate({ where: { conversationId: chatRoom.id }, _max: { createdAt: true } });
+    await db.conversation.update({ where: { id: chatRoom.id }, data: { lastMessageAt: latest._max.createdAt } });
   }
 
   // -------------------------------------------------------------------------
@@ -934,15 +1092,511 @@ Identified potential read-only reentrancy during reward settlement when external
     });
   }
 
+    baselineApplications = applicationsData.length;
+    baselineSubmissions = submissionsData.length;
+    baselineReviews = reviewsData.length;
+    baselineComments = commentsData.length;
+    baselineMessages = messagesData.length;
+    baselineNotifications = notificationsData.length;
+  }
+
+  // -------------------------------------------------------------------------
+  // 9. Realistic Discussion Comments & Image Attachments for Live Marketplace
+  // -------------------------------------------------------------------------
+  let addedComments = 0;
+  let addedApplications = 0;
+  let addedAttachments = 0;
+
+  // 9.1 Image Attachments (stored in apps/web/.uploads/<uploaderId>/)
+  const uploadsBaseDir = getUploadsDir();
+  const liveMarketplaceAttachments: Array<{
+    id: string;
+    uploaderId: string;
+    fileName: string;
+    theme: "terminal" | "topology" | "architecture" | "diff";
+  }> = [
+    { id: "seed-att-001", uploaderId: "cmw1j9k1k00528gqsv4utmemg", fileName: "timelock-revert-trace.png", theme: "terminal" },
+    { id: "seed-att-002", uploaderId: "cmw1j7p6u000c8gqsdrefdrzm", fileName: "docker-compose-topology.png", theme: "topology" },
+    { id: "seed-att-003", uploaderId: "cmt7fampr0002lm8kgxjyudb9", fileName: "websocket-escrow-flow.png", theme: "architecture" },
+    { id: "seed-att-004", uploaderId: "cmw1j9lwc00578gqs5ugp9igz", fileName: "settlement-rounding-diff.png", theme: "diff" },
+    { id: "seed-att-005", uploaderId: "cmw33sor0006odgmtya70m0wo", fileName: "siwe-session-threat-model.png", theme: "architecture" },
+  ];
+
+  for (const att of liveMarketplaceAttachments) {
+    // These optional fixtures refer to accounts already present in the shared demo database.
+    if (!await db.user.findUnique({ where: { id: att.uploaderId }, select: { id: true } })) continue;
+    const userDir = path.join(uploadsBaseDir, att.uploaderId);
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true });
+    }
+    const filePath = path.join(userDir, att.fileName);
+    let buf: Buffer;
+    if (!fs.existsSync(filePath)) {
+      buf = createDiagramPng(440, 180, att.theme);
+      fs.writeFileSync(filePath, buf);
+    } else {
+      buf = fs.readFileSync(filePath);
+    }
+
+    const key = `${att.uploaderId}/${att.fileName}`;
+    const fileUrl = `http://localhost:4000/api/uploads?key=${encodeURIComponent(key)}`;
+    const existingAtt = await db.attachment.findUnique({ where: { id: att.id } });
+    if (!existingAtt) {
+      addedAttachments++;
+      await db.attachment.create({
+        data: {
+          id: att.id,
+          uploaderId: att.uploaderId,
+          fileName: att.fileName,
+          fileUrl,
+          fileSize: buf.length,
+          fileMime: "image/png",
+          purpose: "COMMENT_IMAGE",
+          status: "ATTACHED",
+        },
+      });
+    }
+  }
+
+  // 9.2 Realistic Discussion Comments (Staggered chronological past dates)
+  const liveMarketplaceComments: Array<{
+    id: string;
+    issueId: string;
+    userId: string;
+    body: string;
+    createdAt: Date;
+  }> = [
+    // Thread 1: TimeLockController Safe arbiter (cmw34qqap01ujdgmtft3mp6tj) - 7 comments (total 11 -> HOT)
+    {
+      id: "seed-comment-cmw34qqap-01",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw1j9k1k00528gqsv4utmemg", // Arthur Pendelton
+      body: "Will the 48-hour delay window apply to emergency pause invocations as well, or should circuit breakers remain instantaneous through a separate guardian role?",
+      createdAt: new Date("2026-11-05T14:15:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34qqap-02",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw33rr5x003ydgmt82npe8og", // Trịnh Kim Ngân (Client)
+      body: "Good catch Arthur. Emergency pauses must be instant to protect user funds during an active exploit. Only parameter changes such as the 2.5% platform fee and the 72-hour dispute window must go through the 48-hour timelock.",
+      createdAt: new Date("2026-11-05T17:30:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34qqap-03",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw1j9lwc00578gqs5ugp9igz", // Cao Tien Dung
+      body: "I recommend using OpenZeppelin TimelockControllerUpgradeable with the Safe proxy designated as the sole proposer and executor. That keeps the governance architecture modular without duplicating multi-sig threshold checks.",
+      createdAt: new Date("2026-11-06T03:45:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34qqap-04",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw33rr5x003ydgmt82npe8og", // Trịnh Kim Ngân (Client)
+      body: "That matches our target design. Please make sure the deployment script exports the initialized timelock address so our Safe batch script can wire the roles in a single atomic transaction.",
+      createdAt: new Date("2026-11-06T08:20:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34qqap-05",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw1j9k1k00528gqsv4utmemg", // Arthur Pendelton
+      body: "Here is the Foundry test failure trace showing the revert on delay enforcement before the 48-hour timelock completes. ![image](/api/uploads?key=cmw1j9k1k00528gqsv4utmemg%2Ftimelock-revert-trace.png) The schedule function correctly restricts execution until the eta timestamp has elapsed.",
+      createdAt: new Date("2026-11-06T13:10:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34qqap-06",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw33sor0006odgmtya70m0wo", // Devon Castillo
+      body: "I can deliver this within 3 days. I built an identical Safe timelock setup with Foundry fuzz tests for an escrow protocol last quarter.",
+      createdAt: new Date("2026-11-07T04:00:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34qqap-07",
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      userId: "cmw33rr5x003ydgmt82npe8og", // Trịnh Kim Ngân (Client)
+      body: "Thanks everyone for the clear proposals. Arthur and Devon, please submit your formal application so we can select the developer today.",
+      createdAt: new Date("2026-11-07T11:30:00.000Z"),
+    },
+
+    // Thread 2: Docker Compose local staging (cmw34tisw01yvdgmte2ko72lx) - 8 comments (total 12 -> HOT)
+    {
+      id: "seed-comment-cmw34tisw-01",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw1j7p6u000c8gqsdrefdrzm", // Alex Rivera
+      body: "Does the compose file need to persist Hardhat node state across restarts via volume mounts, or should each clean run start with a freshly seeded genesis state?",
+      createdAt: new Date("2026-11-05T13:40:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-02",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw33smga006hdgmtxcolkhe1", // Trương Vĩnh Phúc (Client)
+      body: "Each run should start from a clean slate by default, but having a --preserve-state flag in the wrapper script would be very helpful for longer integration debugging sessions.",
+      createdAt: new Date("2026-11-05T16:20:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-03",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw1j8wjw003e8gqsx09e4ch3", // Carlos Mendez
+      body: "We should use health check conditions on the postgres and redis services with service_healthy so the Next.js app and event indexer worker never boot into connection refused errors.",
+      createdAt: new Date("2026-11-06T02:15:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-04",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw33smga006hdgmtxcolkhe1", // Trương Vĩnh Phúc (Client)
+      body: "Agreed. That was our biggest headache with the old bash script. The worker kept failing because postgres was still accepting connections.",
+      createdAt: new Date("2026-11-06T06:45:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-05",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw1j7p6u000c8gqsdrefdrzm", // Alex Rivera
+      body: "Here is the service startup dependency diagram with healthy status probes for PostgreSQL and Redis. ![image](/api/uploads?key=cmw1j7p6u000c8gqsdrefdrzm%2Fdocker-compose-topology.png) This configuration eliminates the race where the worker booted before the database schema migrations applied.",
+      createdAt: new Date("2026-11-06T11:50:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-06",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw1j8ncz002p8gqsnbt2008m", // Bui Duc Thinh
+      body: "+1, had the exact same issue on our CI runner. Adding pg_isready as the healthcheck command completely stabilized the startup order.",
+      createdAt: new Date("2026-11-06T18:30:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-07",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw1j8wjw003e8gqsx09e4ch3", // Carlos Mendez
+      body: "I have the compose file and local-up.sh script ready in my branch. I will include a Makefile target as well for convenience.",
+      createdAt: new Date("2026-11-07T05:15:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34tisw-08",
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      userId: "cmw33smga006hdgmtxcolkhe1", // Trương Vĩnh Phúc (Client)
+      body: "Awesome progress. Looking forward to reviewing the PR once your application is formally approved.",
+      createdAt: new Date("2026-11-07T12:00:00.000Z"),
+    },
+
+    // Thread 3: Realtime WebSocket Escrow notifications (cmw34w4kr0236dgmt9d8ii8c2) - 6 comments (total 10 -> HOT)
+    {
+      id: "seed-comment-cmw34w4kr-01",
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      userId: "cmt7fampr0002lm8kgxjyudb9", // Bob (Developer)
+      body: "Will the WebSocket events be broadcast over public rooms by issue ID, or do we deliver them strictly to private user rooms using their verified wallet address?",
+      createdAt: new Date("2026-11-05T15:10:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34w4kr-02",
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      userId: "cmw33qdig0009dgmttifvgjoh", // Sarah Jenkins (Client)
+      body: "General milestone changes should go to the issue room so anyone viewing the bounty sees live status updates. Personal alerts like payment release or application acceptance must be sent to the user's private channel.",
+      createdAt: new Date("2026-11-05T19:00:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34w4kr-03",
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      userId: "cmw1j8dpa00208gqsub44zhw0", // Chloe Martin
+      body: "We should include an unread counter badge in the Zustand state with optimistic updates so the navbar icon increments instantly without waiting for a re-fetch.",
+      createdAt: new Date("2026-11-06T04:20:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34w4kr-04",
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      userId: "cmt7fampr0002lm8kgxjyudb9", // Bob (Developer)
+      body: "Created an architecture diagram for the event fanout from Redis pub/sub to Socket.IO clients. ![image](/api/uploads?key=cmt7fampr0002lm8kgxjyudb9%2Fwebsocket-escrow-flow.png) The room multiplexing keeps payload sizes minimal by scoping broadcast channels per user and issue.",
+      createdAt: new Date("2026-11-06T10:40:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34w4kr-05",
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      userId: "cmw33qdig0009dgmttifvgjoh", // Sarah Jenkins (Client)
+      body: "The architecture diagram looks very clean. Please ensure connection dropouts fall back to polling gracefully if the WebSocket handshake fails.",
+      createdAt: new Date("2026-11-06T16:15:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34w4kr-06",
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      userId: "cmw33t5bi0081dgmtcp8lixmq", // Châu Quốc Dũng
+      body: "I can wire the Socket.IO client hook and Zustand store within 2 days. Tested the reconnect logic against flaky network conditions.",
+      createdAt: new Date("2026-11-07T09:45:00.000Z"),
+    },
+
+    // Thread 4: Settlement 50/50 rounding issue (cmw34dfmc0192dgmtj4cfmao9) - 5 comments (total 9 -> HOT)
+    {
+      id: "seed-comment-cmw34dfmc-01",
+      issueId: "cmw34dfmc0192dgmtj4cfmao9",
+      userId: "cmw1j9lwc00578gqs5ugp9igz", // Cao Tien Dung
+      body: "When an odd amount like 1000000000000000001 wei is split 50/50, which party is expected to absorb the single leftover wei after subtracting the platform fee?",
+      createdAt: new Date("2026-11-05T14:50:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34dfmc-02",
+      issueId: "cmw34dfmc0192dgmtj4cfmao9",
+      userId: "cmw33q6pp0002dgmtjbc9olb3", // Trần Hải Đăng (Client)
+      body: "Per protocol spec QĐ-23, the developer receives the remainder wei in a split settlement. The client gets floor((netAmount * clientBps) / 10000) and developer gets netAmount - clientShare.",
+      createdAt: new Date("2026-11-05T18:15:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34dfmc-03",
+      issueId: "cmw34dfmc0192dgmtj4cfmao9",
+      userId: "cmw1j9lwc00578gqs5ugp9igz", // Cao Tien Dung
+      body: "Here is the test assertion output showing the 1 wei invariant discrepancy when splitting 1000000000000000001 wei. ![image](/api/uploads?key=cmw1j9lwc00578gqs5ugp9igz%2Fsettlement-rounding-diff.png) Allocating the remainder to the developer share satisfies the equality check without truncating the platform fee.",
+      createdAt: new Date("2026-11-06T09:30:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34dfmc-04",
+      issueId: "cmw34dfmc0192dgmtj4cfmao9",
+      userId: "cmw1j8jp2002f8gqszh5bo3p2", // Dang Thai Son
+      body: "We also need to replace the Number(amount) conversion in the web frontend settlement modal with native BigInt formatting so the UI preview matches the contract transaction exactly.",
+      createdAt: new Date("2026-11-06T15:40:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34dfmc-05",
+      issueId: "cmw34dfmc0192dgmtj4cfmao9",
+      userId: "cmw33q6pp0002dgmtjbc9olb3", // Trần Hải Đăng (Client)
+      body: "Excellent observation Dang. Please make sure the unit tests verify both odd wei allocations and zero-balance edge cases before opening the PR.",
+      createdAt: new Date("2026-11-07T08:00:00.000Z"),
+    },
+
+    // Thread 5: ThirdwebAuth SIWE session audit (cmw34lbzh01lxdgmtdklgvxef) - 2 comments (total 6)
+    {
+      id: "seed-comment-cmw34lbzh-01",
+      issueId: "cmw34lbzh01lxdgmtdklgvxef",
+      userId: "cmw33sor0006odgmtya70m0wo", // Devon Castillo
+      body: "Here is the sequence diagram illustrating how replaying an expired SIWE session token can bypass cookie invalidation. ![image](/api/uploads?key=cmw33sor0006odgmtya70m0wo%2Fsiwe-session-threat-model.png) Adding an in-memory TTL blacklist for invalidated session nonces closes this window.",
+      createdAt: new Date("2026-11-06T14:20:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw34lbzh-02",
+      issueId: "cmw34lbzh01lxdgmtdklgvxef",
+      userId: "cmw33t0kc007ndgmt830g7nsm", // Dương Văn Thắng (Client)
+      body: "This threat model is very clear. Let us move forward with the Redis-backed nonce revocation list so multiple server instances share the invalidation state.",
+      createdAt: new Date("2026-11-07T03:10:00.000Z"),
+    },
+
+    // Thread 6: Prometheus/Grafana RPC latency (cmw3456t800w4dgmtihk10swj) - 2 comments (total 6)
+    {
+      id: "seed-comment-cmw3456t8-01",
+      issueId: "cmw3456t800w4dgmtihk10swj",
+      userId: "cmw1j7p6u000c8gqsdrefdrzm", // Alex Rivera
+      body: "Are we exporting standard Prometheus histogram buckets for RPC request duration, or do you have custom latency percentiles like p99.9 required for SLA monitoring?",
+      createdAt: new Date("2026-11-06T07:50:00.000Z"),
+    },
+    {
+      id: "seed-comment-cmw3456t8-02",
+      issueId: "cmw3456t800w4dgmtihk10swj",
+      userId: "cmw33qpvb0018dgmtcwhgypm4", // Phạm Minh Khôi (Client)
+      body: "Standard Prometheus buckets starting from 10ms up to 10s will be sufficient. Please include a separate panel for worker job processing time.",
+      createdAt: new Date("2026-11-06T17:05:00.000Z"),
+    },
+
+    // Thread 7: Keyboard shortcuts navigation (cmw34g13601dadgmtyy9a0909) - 1 comment (total 5)
+    {
+      id: "seed-comment-cmw34g136-01",
+      issueId: "cmw34g13601dadgmtyy9a0909",
+      userId: "cmw1j8wjw003e8gqsx09e4ch3", // Carlos Mendez
+      body: "I can integrate react-hotkeys-hook to handle j/k list navigation and / to focus the search bar while preventing collisions when typing in comment textareas.",
+      createdAt: new Date("2026-11-06T13:45:00.000Z"),
+    },
+
+    // Thread 8: Task completion prediction (cmw34ane0014ndgmtsftgom28) - 1 comment (total 5)
+    {
+      id: "seed-comment-cmw34ane0-01",
+      issueId: "cmw34ane0014ndgmtsftgom28",
+      userId: "cmw1j995z00488gqsdlsydsth", // Fatima Al-Mansoor
+      body: "I suggest training a lightweight gradient boosted tree model on historical task completion times before reaching for complex neural models. Baseline tabular features will give much faster inference.",
+      createdAt: new Date("2026-11-06T12:00:00.000Z"),
+    },
+
+    // Thread 9: Bridge relayer audit (sample-issue-004) - 2 comments (total 3)
+    {
+      id: "seed-comment-sample004-01",
+      issueId: "sample-issue-004",
+      userId: "cmt7fampr0002lm8kgxjyudb9", // Bob (Developer)
+      body: "I reviewed the relayer contract and noted that nonces are sequential rather than bitmapped. This could cause head-of-line blocking if a transaction with an earlier nonce fails.",
+      createdAt: new Date("2026-11-06T15:00:00.000Z"),
+    },
+    {
+      id: "seed-comment-sample004-02",
+      issueId: "sample-issue-004",
+      userId: "cmt7falfv0001lm8kcjlgt704", // Alice (Client)
+      body: "Good catch Bob. Bitmapped nonces would allow parallel processing of independent transactions. Please include that recommendation in your audit report.",
+      createdAt: new Date("2026-11-07T02:30:00.000Z"),
+    },
+
+    // Thread 10: Developer analytics dashboard (sample-issue-005) - 3 comments (total 4)
+    {
+      id: "seed-comment-sample005-01",
+      issueId: "sample-issue-005",
+      userId: "cmw1j8wjw003e8gqsx09e4ch3", // Carlos Mendez
+      body: "Should the earnings chart display amounts converted to USD at the current rate or purely in the original token denominations?",
+      createdAt: new Date("2026-11-06T11:15:00.000Z"),
+    },
+    {
+      id: "seed-comment-sample005-02",
+      issueId: "sample-issue-005",
+      userId: "cmt7falfv0001lm8kcjlgt704", // Alice (Client)
+      body: "Display both if possible: primary amount in USDC with the local currency estimate underneath in muted text.",
+      createdAt: new Date("2026-11-06T16:40:00.000Z"),
+    },
+    {
+      id: "seed-comment-sample005-03",
+      issueId: "sample-issue-005",
+      userId: "cmw1j8wjw003e8gqsx09e4ch3", // Carlos Mendez
+      body: "Understood. I will use tremor and recharts with dark mode styling matching our design system tokens.",
+      createdAt: new Date("2026-11-07T06:20:00.000Z"),
+    },
+  ];
+
+  for (const comment of liveMarketplaceComments) {
+    if (!await db.issue.findUnique({ where: { id: comment.issueId }, select: { id: true } }) ||
+        !await db.user.findUnique({ where: { id: comment.userId }, select: { id: true } })) continue;
+    const existing = await db.issueComment.findUnique({ where: { id: comment.id } });
+    if (!existing) {
+      addedComments++;
+      await db.issueComment.create({
+        data: {
+          id: comment.id,
+          issueId: comment.issueId,
+          userId: comment.userId,
+          body: comment.body,
+          createdAt: comment.createdAt,
+          updatedAt: comment.createdAt,
+        },
+      });
+    } else {
+      await db.issueComment.update({
+        where: { id: comment.id },
+        data: { body: comment.body, updatedAt: comment.createdAt },
+      });
+    }
+  }
+
+  // 9.3 Additional Pending Applications for Realistic Spread
+  const liveMarketplaceApplications = [
+    {
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      developerId: "cmw1j9k1k00528gqsv4utmemg",
+      status: ApplicationStatus.PENDING,
+      message: "Experienced Solidity and Safe developer. Ready to implement the TimelockController with Foundry unit and fuzz tests within 3 days.",
+      createdAt: new Date("2026-11-06T14:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      developerId: "cmw33sor0006odgmtya70m0wo",
+      status: ApplicationStatus.PENDING,
+      message: "Built similar Safe governance modules for escrow protocols. Can deliver clean code with 100% test coverage.",
+      createdAt: new Date("2026-11-07T05:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34qqap01ujdgmtft3mp6tj",
+      developerId: "cmw1j9lwc00578gqs5ugp9igz",
+      status: ApplicationStatus.PENDING,
+      message: "I have implemented OpenZeppelin TimelockController architectures across multiple production protocols.",
+      createdAt: new Date("2026-11-06T08:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      developerId: "cmt7fampr0002lm8kgxjyudb9",
+      status: ApplicationStatus.PENDING,
+      message: "Senior full-stack engineer with deep Socket.IO and Zustand experience. Ready to build the realtime notification bridge.",
+      createdAt: new Date("2026-11-06T11:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34w4kr0236dgmt9d8ii8c2",
+      developerId: "cmw1j8dpa00208gqsub44zhw0",
+      status: ApplicationStatus.PENDING,
+      message: "Ready to implement optimistic navbar notification badges and resilient reconnection handling.",
+      createdAt: new Date("2026-11-06T15:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      developerId: "cmw1j7p6u000c8gqsdrefdrzm",
+      status: ApplicationStatus.PENDING,
+      message: "DevOps engineer specializing in Docker clusters and reproducible local development stacks.",
+      createdAt: new Date("2026-11-06T12:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34tisw01yvdgmte2ko72lx",
+      developerId: "cmw1j8wjw003e8gqsx09e4ch3",
+      status: ApplicationStatus.PENDING,
+      message: "Will configure health checks, volume mounts, and wrapper scripts for seamless 1-command startup.",
+      createdAt: new Date("2026-11-07T06:00:00.000Z"),
+    },
+    {
+      issueId: "cmw34dfmc0192dgmtj4cfmao9",
+      developerId: "cmw1j9lwc00578gqs5ugp9igz",
+      status: ApplicationStatus.PENDING,
+      message: "Will fix the 1 wei precision truncation and add exhaustive property-based tests across odd balance distributions.",
+      createdAt: new Date("2026-11-06T10:00:00.000Z"),
+    },
+    {
+      issueId: "sample-issue-004",
+      developerId: "cmt7fampr0002lm8kgxjyudb9",
+      status: ApplicationStatus.PENDING,
+      message: "I specialize in EVM security audits and bridge replay analysis. Ready to conduct full threat model and invariant tests.",
+      createdAt: new Date("2026-11-06T16:00:00.000Z"),
+    },
+    {
+      issueId: "sample-issue-005",
+      developerId: "cmw1j8wjw003e8gqsx09e4ch3",
+      status: ApplicationStatus.PENDING,
+      message: "Frontend engineer with data visualization expertise. Ready to implement responsive charts with tremor and Tailwind.",
+      createdAt: new Date("2026-11-06T12:00:00.000Z"),
+    },
+    {
+      issueId: "sample-issue-005",
+      developerId: "cmw1j8ncz002p8gqsnbt2008m",
+      status: ApplicationStatus.PENDING,
+      message: "Ready to build the developer analytics dashboard with accessible charts and zero hydration errors.",
+      createdAt: new Date("2026-11-07T07:00:00.000Z"),
+    },
+  ];
+
+  for (const app of liveMarketplaceApplications) {
+    if (!await db.issue.findUnique({ where: { id: app.issueId }, select: { id: true } }) ||
+        !await db.user.findUnique({ where: { id: app.developerId }, select: { id: true } })) continue;
+    const existing = await db.application.findUnique({
+      where: {
+        issueId_developerId: {
+          issueId: app.issueId,
+          developerId: app.developerId,
+        },
+      },
+    });
+    if (!existing) {
+      addedApplications++;
+      await db.application.create({
+        data: {
+          issueId: app.issueId,
+          developerId: app.developerId,
+          status: app.status,
+          message: app.message,
+          createdAt: app.createdAt,
+        },
+      });
+    }
+  }
+
+  const totalUsers = await db.user.count();
+  const totalIssues = await db.issue.count();
+  const totalApplications = await db.application.count();
+  const totalSubmissions = await db.submission.count();
+  const totalReviews = await db.review.count();
+  const totalComments = await db.issueComment.count();
+  const totalMessages = await db.message.count();
+  const totalNotifications = await db.notification.count();
+
   return {
-    users: 8,
-    issues: 12,
-    applications: applicationsData.length,
-    submissions: submissionsData.length,
-    reviews: reviewsData.length,
-    comments: commentsData.length,
-    messages: messagesData.length,
-    notifications: notificationsData.length,
+    users: totalUsers,
+    issues: totalIssues,
+    applications: totalApplications,
+    submissions: totalSubmissions,
+    reviews: totalReviews,
+    comments: totalComments,
+    messages: totalMessages,
+    notifications: totalNotifications,
+    addedComments,
+    addedApplications,
+    addedAttachments,
   };
 }
 
@@ -958,14 +1612,15 @@ if (isDirectRun) {
       console.log("========================================================");
       console.log(`
   Summary of seeded records in '${dbName}':
-    - Users:         ${summary.users} (1 Admin, 3 Clients, 4 Developers)
-    - Bounties:     ${summary.issues} (9 OPEN, 0 IN_PROGRESS, 3 COMPLETED)
-    - Applications: ${summary.applications} verified proposals
-    - Submissions:   ${summary.submissions} complete delivery records
-    - Reviews:       ${summary.reviews} genuine 5-star reviews with testimonials
-    - Comments:      ${summary.comments} technical discussion threads
-    - Messages:      ${summary.messages} direct messaging dialogues
-    - Notifications: ${summary.notifications} user alerts
+    - Users:               ${summary.users}
+    - Bounties:           ${summary.issues}
+    - Applications:       ${summary.applications} (Newly added: ${summary.addedApplications})
+    - Submissions:         ${summary.submissions}
+    - Reviews:             ${summary.reviews}
+    - Comments:            ${summary.comments} (Newly added: ${summary.addedComments})
+    - Image Attachments:   (Newly added: ${summary.addedAttachments})
+    - Messages:            ${summary.messages}
+    - Notifications:       ${summary.notifications}
       `);
     })
     .catch((e) => {

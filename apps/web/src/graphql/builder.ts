@@ -58,12 +58,12 @@ export function parseTokenAmountInput(text: string, token: { decimals: number })
   try {
     return parseTokenAmount(text, token.decimals);
   } catch {
-    throw gqlError("Số tiền không hợp lệ", "BAD_USER_INPUT");
+    throw gqlError("Invalid amount", "BAD_USER_INPUT");
   }
 }
 
 export const TokenAmountRef = builder.objectRef<TokenAmountValue>("TokenAmount").implement({
-  description: "Số tiền token: raw (đơn vị nhỏ nhất) và formatted (hiển thị)",
+  description: "Token amount: raw (smallest unit) and formatted (display)",
   fields: (t) => ({
     raw: t.string({ resolve: (amount) => amount.raw.toString() }),
     decimals: t.exposeInt("decimals"),

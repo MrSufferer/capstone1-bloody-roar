@@ -1,3 +1,4 @@
+import { ensureWorkConversation } from "./conversations";
 // packages/database/src/seed.ts
 // Seed the database with admin user and sample data for development
 // Usage: bun run db:seed
@@ -346,10 +347,15 @@ Convert the Figma design to a pixel-perfect, responsive pricing page.
   ];
 
   for (const msg of messages) {
+    const chatIssue = await prisma.issue.findUniqueOrThrow({ where: { id: issue3.id } });
+    const chatRoom = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM issues WHERE id = ${chatIssue.id} FOR UPDATE`;
+      return ensureWorkConversation(tx, chatIssue);
+    });
     await prisma.message.upsert({
       where: { id: msg.id },
       update: {},
-      create: { ...msg, issueId: issue3.id },
+      create: { ...msg, issueId: issue3.id, conversationId: chatRoom.id },
     });
   }
   console.log(`✅ Sample messages created`);

@@ -5,6 +5,7 @@ import type { EffectMeta } from "./escrow";
 
 export async function applyWorkSubmitted(tx: Prisma.TransactionClient, effect: Extract<FoldEffect, { kind: "WORK_SUBMITTED" }>, meta: EffectMeta): Promise<void> {
   const projection = await tx.escrowProjection.findUnique({ where: { escrowIdHash: effect.escrowIdHash } });
+  if (projection) await tx.escrowProjection.update({ where: { id: projection.id }, data: { reviewDeadline: new Date(Number(meta.blockTimestamp) * 1000 + 7 * 86_400_000) } });
   if (!projection?.issueId || !projection.escrowKey) return;
   const issue = await tx.issue.findUniqueOrThrow({ where: { id: projection.issueId }, select: { clientId: true, title: true } });
   const delivery = await tx.submission.findFirst({ where: { issueId: projection.issueId, deliveryHash: { equals: effect.deliveryHash, mode: "insensitive" } } });

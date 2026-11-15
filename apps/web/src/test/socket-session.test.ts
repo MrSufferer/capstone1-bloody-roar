@@ -4,10 +4,11 @@ import type { Server } from "socket.io";
 const { verifyJWT, prisma, tx } = vi.hoisted(() => {
   const tx = {
     issue: { findUnique: vi.fn() },
+    conversation: { findFirst: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn().mockResolvedValue({ lastMessageAt: null }), update: vi.fn() },
     $queryRaw: vi.fn().mockResolvedValue([]),
     notification: { create: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
-    message: { create: vi.fn(), findUniqueOrThrow: vi.fn() },
-    attachment: { create: vi.fn() },
+    message: { create: vi.fn(), findFirst: vi.fn().mockResolvedValue(null), findUniqueOrThrow: vi.fn() },
+    attachment: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     dispute: { findUnique: vi.fn(async () => null) },
   };
   const prisma = {
@@ -36,7 +37,7 @@ vi.mock("@bloody-roar/database", () => ({
   prisma,
   AILogStatus: { SUCCESS: "SUCCESS" },
   NotificationType: { MESSAGE_RECEIVED: "MESSAGE_RECEIVED" },
-  Prisma: { TransactionIsolationLevel: { Serializable: "Serializable" } },
+  Prisma: { TransactionIsolationLevel: { Serializable: "Serializable" }, PrismaClientKnownRequestError: class extends Error {} },
 }));
 
 import { registerSocketHandlers } from "../socket/handlers";
@@ -111,6 +112,9 @@ describe("socket message:send AI guard on files", () => {
     verifyJWT.mockResolvedValueOnce(client);
     prisma.issue.findUnique.mockResolvedValueOnce(openIssue);
     tx.issue.findUnique.mockResolvedValueOnce(openIssue);
+    const room = { id: "conv-1", issueId: "issue-1", kind: "ISSUE_WORK", issue: openIssue, application: null, participants: [{ userId: "client-1", role: "CLIENT" }, { userId: "dev-1", role: "DEVELOPER" }] };
+    tx.conversation.findFirst.mockResolvedValue(room); tx.conversation.findUnique.mockResolvedValue(room);
+    tx.attachment.findFirst.mockResolvedValue({ id: "file-1", fileName: "dev@example.com.pdf" });
     tx.message.create.mockResolvedValueOnce({ id: "message-1" });
     tx.message.findUniqueOrThrow.mockResolvedValueOnce({
       id: "message-1",
@@ -118,6 +122,7 @@ describe("socket message:send AI guard on files", () => {
       type: "FILE",
       issueId: "issue-1",
       senderId: "client-1",
+      sender: { id: "client-1", name: "Client", avatar: null },
       wasModified: true,
       createdAt: new Date(),
       attachments: [],
@@ -143,7 +148,7 @@ describe("socket message:send AI guard on files", () => {
 
     expect(callback.mock.calls[0]).toEqual([]);
     expect(tx.message.create.mock.calls[0]?.[0].data).toMatchObject({ content: "key [REDACTED]", wasModified: true });
-    expect(tx.attachment.create.mock.calls[0]?.[0].data.fileName).toBe("[REDACTED]");
+    expect(tx.attachment.update.mock.calls[0]?.[0].data.fileName).toBe("[REDACTED]");
     expect(prisma.notification.create.mock.calls[0]?.[0].data).toMatchObject({
       userId: "dev-1",
       type: "MESSAGE_RECEIVED",

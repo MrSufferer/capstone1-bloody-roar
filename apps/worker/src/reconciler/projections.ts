@@ -11,7 +11,7 @@ const zeroHash = `0x${"00".repeat(32)}`;
 const seconds = (value: Date) => BigInt(Math.floor(value.getTime() / 1000));
 const nonzero = (value: Hex) => value.toLowerCase() !== zeroHash;
 
-type ChainEscrow = { client: Hex; developer: Hex; arbiter: Hex; feeRecipient: Hex; amount: bigint; depositedAt: bigint; deliveryDeadline: bigint; termsHash: Hex; deliveryHash: Hex; phase: number; resolutionKind: number };
+type ChainEscrow = { client: Hex; developer: Hex; arbiter: Hex; feeRecipient: Hex; amount: bigint; depositedAt: bigint; deliveryDeadline: bigint; termsHash: Hex; deliveryHash: Hex; submittedAt: bigint; phase: number; resolutionKind: number };
 type ChainSettlement = { proposer: Hex; clientBps: bigint };
 type ChainDispute = { raisedBy: Hex; raisedAt: bigint; raiserEvidenceHash: Hex; counterpartyEvidenceHash: Hex; initialClientBps: bigint; initialRulingAt: bigint; initialDecisionHash: Hex; challengedAt: bigint; finalClientBps: bigint; finalRulingAt: bigint; finalDecisionHash: Hex };
 
@@ -41,7 +41,7 @@ async function chainEscrow(rpc: RpcClient, config: IndexerConfig, block: bigint,
   if (!phase || !resolutionKind) throw new Error("Unknown escrow phase or resolution from contract");
   return { client: raw.client, developer: raw.developer, arbiter: raw.arbiter, feeRecipient: raw.feeRecipient,
     amount: raw.amount, depositedAt: raw.depositedAt, deliveryDeadline: raw.deliveryDeadline, termsHash: raw.termsHash,
-    deliveryHash: nonzero(raw.deliveryHash) ? raw.deliveryHash : null, phase, resolutionKind,
+    deliveryHash: nonzero(raw.deliveryHash) ? raw.deliveryHash : null, submittedAt: raw.submittedAt || null, phase, resolutionKind,
     settlement: settlement.proposer.toLowerCase() === zeroAddress ? null : { proposer: settlement.proposer, clientBps: Number(settlement.clientBps) },
     dispute: disputeView(dispute) };
 }
@@ -78,7 +78,7 @@ export async function reconcileProjections({ db, rpc, config, now }: { db: Prism
     const state: EscrowState = { escrowIdHash: projection.escrowIdHash as Hex, client: projection.client as Hex, developer: projection.developer as Hex,
       arbiter: projection.arbiter as Hex, feeRecipient: projection.feeRecipient as Hex, amount: BigInt(projection.amountRaw.toFixed()),
       depositedAt: seconds(projection.depositedAt), deliveryDeadline: seconds(projection.deliveryDeadline), termsHash: projection.termsHash as Hex,
-      deliveryHash: projection.deliveryHash as Hex | null, phase: projection.phase, resolutionKind: projection.resolutionKind,
+      deliveryHash: projection.deliveryHash as Hex | null, submittedAt: projection.deliveryHash ? BigInt(Math.floor(projection.reviewDeadline.getTime() / 1000)) - 7n * 86400n : null, phase: projection.phase, resolutionKind: projection.resolutionKind,
       settlement: projection.settlementProposer && projection.settlementClientBps !== null ? { proposer: projection.settlementProposer as Hex, clientBps: projection.settlementClientBps } : null,
       dispute };
     const onchain = await chainEscrow(rpc, config, safe.number, projection.escrowKey);

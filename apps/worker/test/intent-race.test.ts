@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@bloody-roar/database";
@@ -7,6 +8,8 @@ import { ESCROW_ABI, type Hex } from "@bloody-roar/shared/escrow";
 import { reconcileIndexedIntents } from "../src/reconciler/intents";
 import { handleReorg } from "../src/indexer/reorg";
 import { cleanupChain, fakeRpc, newChain, rawLog, scanToHead, testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const config = testConfig();
 const hex = (n: number) => `0x${randomBytes(n).toString("hex")}` as Hex;
@@ -57,4 +60,6 @@ test("late transaction hash confirms only its canonical claim and reorg restores
   expect((await row()).status).toBe("SUBMITTED");
   await reconcileIndexedIntents(prisma, config);
   expect((await row()).status).toBe("SUBMITTED");
+});
+
 });

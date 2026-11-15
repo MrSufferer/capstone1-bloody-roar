@@ -22,6 +22,6 @@ export async function readFundingState(input: { chainId: number; contractAddress
     ]);
     return { balance, allowance, paused, token, blockTimestamp: block.timestamp };
   } catch {
-    throw gqlError("Không thể đọc trạng thái ký quỹ trên chain", "ESCROW_RPC_UNAVAILABLE");
+    throw gqlError("Could not read the on-chain escrow state", "ESCROW_RPC_UNAVAILABLE");
   }
 }

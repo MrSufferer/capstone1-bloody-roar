@@ -66,6 +66,7 @@ export type EscrowState = {
   deliveryDeadline: bigint;
   termsHash: Hex;
   deliveryHash: Hex | null;
+  submittedAt: bigint | null;
   phase: EscrowPhase;
   resolutionKind: EscrowResolutionKind;
   settlement: SettlementState | null;

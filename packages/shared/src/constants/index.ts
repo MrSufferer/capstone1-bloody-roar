@@ -87,6 +87,8 @@ export const ALLOWED_FILE_TYPES = [
   // Documents
   "application/pdf",
   "text/plain",
+  "text/x-diff",
+  "text/x-patch",
   "text/markdown",
   // Archives
   "application/zip",

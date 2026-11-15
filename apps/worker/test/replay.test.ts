@@ -1,3 +1,4 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
@@ -5,6 +6,8 @@ import { prisma } from "@bloody-roar/database";
 import { loadCheckpoint, checkpointKey } from "../src/indexer/checkpoint";
 import { requestReplay } from "../src/indexer/replay";
 import { cleanupChain, testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 
@@ -33,4 +36,6 @@ test("replay moves the cursor to fromBlock - 1 and flags the request", async () 
 
 test("replay before the escrow deploy block is refused", async () => {
   await expect(requestReplay(prisma, config, 99n)).rejects.toThrow(/before the escrow deploy block/);
+});
+
 });

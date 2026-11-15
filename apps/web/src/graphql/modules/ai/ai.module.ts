@@ -1,3 +1,4 @@
+import { sanitizeSourceContext } from "@bloody-roar/shared/source-privacy";
 import { IssueStatus, TestCasePriority, TestCaseSource } from "@bloody-roar/database";
 import type { AILog, Prisma, TestCase as TestCaseModel } from "@bloody-roar/database";
 import { z } from "zod";
@@ -6,6 +7,8 @@ import { requireAdmin, requireAuth } from "../../context";
 import { gqlError, parseOrThrow } from "../../errors";
 import { completeAI } from "../../../ai/model-router";
 import { scanAndMask } from "../../../ai/guard/scanner";
+import { validTestPath } from "@bloody-roar/shared/test-runner";
+import { queueBaseCheck } from "../../../lib/test-runs";
 import { aiRateLimit } from "../../../lib/rate-limit";
 
 const TestCasePriorityEnum = builder.enumType(TestCasePriority, { name: "TestCasePriority" });
@@ -25,6 +28,10 @@ export const TestCaseRef = builder.objectRef<GraphQLTestCase>("TestCase").implem
     priority: t.expose("priority", { type: TestCasePriorityEnum }),
     source: t.expose("source", { type: TestCaseSourceEnum, nullable: true }),
     isApproved: t.exposeBoolean("isApproved"),
+    testCode: t.exposeString("testCode", { nullable: true }),
+    testFilePath: t.exposeString("testFilePath", { nullable: true }),
+    expectBaseFail: t.exposeBoolean("expectBaseFail"),
+    baseStatus: t.exposeString("baseStatus", { nullable: true }),
     clientNotes: t.exposeString("clientNotes", { nullable: true }),
     issueId: t.exposeString("issueId"),
     createdAt: t.string({ resolve: (testCase) => testCase.createdAt.toISOString() }),
@@ -38,6 +45,9 @@ function toGraphqlTestCase(testCase: TestCaseModel): GraphQLTestCase {
 }
 
 const GeneratedCaseSchema = z.object({
+  testFilePath: z.string().refine(validTestPath, "Invalid test path").optional(),
+  testCode: z.string().min(1).max(20_000).optional(),
+  expectBaseFail: z.boolean().optional(),
   title: z.string().trim().min(4).max(160),
   description: z.string().trim().min(8).max(1000),
   given: z.string().trim().min(4).max(1000),
@@ -100,12 +110,15 @@ builder.mutationField("generateTestCases", (t) =>
       if (issue.clientId !== user.id) throw gqlError("Only the task owner can generate acceptance criteria", "FORBIDDEN");
       if (issue.status !== IssueStatus.OPEN) throw gqlError("Acceptance criteria cannot be changed after a developer is selected", "ISSUE_NOT_EDITABLE");
 
+      const source = await ctx.db.sourceSnapshot.findUnique({ where: { issueId: issue.id } });
+      const executable = source?.status === "READY";
       const safeTask = scanAndMask(JSON.stringify({
         title: issue.title,
         description: issue.description,
         category: issue.category,
         requiredSkills: issue.requiredSkills,
         githubRepo: issue.githubRepo,
+        ...(executable ? { framework: source.framework, context: sanitizeSourceContext(source.context ?? "") } : {}),
       })).content;
 
       try {
@@ -113,11 +126,11 @@ builder.mutationField("generateTestCases", (t) =>
           task: "TESTGEN",
           issueId: issue.id,
           jsonMode: true,
-          maxTokens: 2200,
+          maxTokens: executable ? 8000 : 2200,
           messages: [
             {
               role: "system",
-              content: "Act as an experienced software QA engineer. Generate 5 to 10 concrete acceptance tests in BDD format. Cover a normal success path, validation failures, edge cases, and relevant security behaviour. Do not invent requirements that are absent from the task. Return strict JSON only: {\"testCases\":[{\"title\":string,\"description\":string,\"given\":string,\"when\":string,\"then\":string,\"priority\":\"CRITICAL\"|\"NORMAL\"|\"LOW\",\"isEdgeCase\":boolean}]}. These are drafts for client review; do not claim that tests have run.",
+              content: (executable ? "Source is supplied. Every case must also contain testFilePath under __bloodyroar__/ ending .test.ts (vitest) or test_*.py (pytest), self-contained executable testCode importing project source via relative paths, and expectBaseFail (true for bug reproduction). Test names must contain [TC:{{ID}}]. For pytest use parametrized test IDs to include this marker. Return these extra fields in each case. " : "") + "Act as an experienced software QA engineer. Generate 5 to 10 concrete acceptance tests in BDD format. Cover a normal success path, validation failures, edge cases, and relevant security behaviour. Do not invent requirements that are absent from the task. Return strict JSON only: {\"testCases\":[{\"title\":string,\"description\":string,\"given\":string,\"when\":string,\"then\":string,\"priority\":\"CRITICAL\"|\"NORMAL\"|\"LOW\",\"isEdgeCase\":boolean}]}. These are drafts for client review; do not claim that tests have run.",
             },
             { role: "user", content: safeTask },
           ],
@@ -126,14 +139,18 @@ builder.mutationField("generateTestCases", (t) =>
         const cases = await ctx.db.$transaction(async (tx) => {
           await lockCriteriaIssue(tx, issue.id, user.id);
           await tx.testCase.deleteMany({ where: { issueId: issue.id, source: TestCaseSource.AI, isApproved: false } });
-          await tx.testCase.createMany({
-            data: generated.testCases.map((testCase) => ({
-              ...testCase,
-              source: TestCaseSource.AI,
-              issueId: issue.id,
-              isApproved: false,
-            })),
-          });
+          if (executable) {
+            const currentSource = await tx.sourceSnapshot.findUnique({ where: { issueId: issue.id } });
+            if (currentSource?.sha256 !== source.sha256) throw gqlError("Source changed while generating tests", "SOURCE_CHANGED");
+            for (const item of generated.testCases) {
+              if (!item.testCode || !item.testFilePath || !item.testCode.includes("[TC:{{ID}}]")) throw gqlError("Executable tests must include a path, code and test marker", "AI_INVALID_RESPONSE");
+              const created = await tx.testCase.create({ data: { ...item, testFilePath: item.testFilePath, testCode: item.testCode, expectBaseFail: item.expectBaseFail ?? true, source: TestCaseSource.AI, issueId: issue.id, isApproved: false } });
+              await tx.testCase.update({ where: { id: created.id }, data: { testCode: item.testCode.replaceAll("{{ID}}", created.id) } });
+            }
+            await queueBaseCheck(tx, issue.id);
+          } else {
+            await tx.testCase.createMany({ data: generated.testCases.map(({ testFilePath: _path, testCode: _code, expectBaseFail: _expect, ...item }) => ({ ...item, source: TestCaseSource.AI, issueId: issue.id, isApproved: false })) });
+          }
           return tx.testCase.findMany({
             where: { issueId: issue.id },
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -152,7 +169,7 @@ builder.mutationField("generateTestCases", (t) =>
 );
 
 // Lock the issue before editing criteria so selection cannot commit stale terms.
-async function lockCriteriaIssue(tx: Prisma.TransactionClient, issueId: string, userId: string) {
+export async function lockCriteriaIssue(tx: Prisma.TransactionClient, issueId: string, userId: string) {
   await tx.$queryRaw`SELECT id FROM issues WHERE id = ${issueId} FOR UPDATE`;
   const issue = await tx.issue.findUnique({ where: { id: issueId }, select: { clientId: true, status: true } });
   if (!issue) throw gqlError("Task not found", "NOT_FOUND");
@@ -162,6 +179,9 @@ async function lockCriteriaIssue(tx: Prisma.TransactionClient, issueId: string, 
 }
 
 const UpdateTestCaseSchema = z.object({
+  testCode: z.string().min(1).max(20_000).optional(),
+  testFilePath: z.string().refine(validTestPath, "Invalid test path").optional(),
+  expectBaseFail: z.boolean().optional(),
   id: z.string().min(1),
   title: z.string().trim().min(4).max(160).optional(),
   description: z.string().trim().min(8).max(1000).optional(),
@@ -180,6 +200,7 @@ builder.mutationField("updateTestCase", (t) =>
     typeOptions: { name: "UpdateTestCaseInput" },
     input: {
       id: t.input.id({ required: true }),
+      testCode: t.input.string(), testFilePath: t.input.string(), expectBaseFail: t.input.boolean(),
       title: t.input.string({ required: false }),
       description: t.input.string({ required: false }),
       given: t.input.string({ required: false }),
@@ -200,11 +221,14 @@ builder.mutationField("updateTestCase", (t) =>
         const testCase = await tx.testCase.findUnique({ where: { id: input.id } });
         if (!testCase || testCase.issueId !== initial.issueId) throw gqlError("Acceptance criterion not found", "NOT_FOUND");
         const changes = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "id"));
-        const editsCriteria = ["title", "description", "given", "when", "then", "priority", "isEdgeCase"].some((key) => key in input);
+        const editsCriteria = ["title", "description", "given", "when", "then", "priority", "isEdgeCase", "testCode", "testFilePath", "expectBaseFail"].some((key) => key in input);
+        const codeChanged = ["testCode", "testFilePath", "expectBaseFail"].some((key) => key in input);
+        if ((input.testCode ?? testCase.testCode) && input.isApproved && (codeChanged || testCase.baseStatus !== ((input.expectBaseFail ?? testCase.expectBaseFail) ? "failed" : "passed"))) throw gqlError("Verify this test on the base source before approving it", "TEST_NOT_VERIFIED");
         const approved = input.isApproved ?? (editsCriteria ? false : testCase.isApproved);
         const termsChanged = approved !== testCase.isApproved || (testCase.isApproved && editsCriteria);
-        const updated = await tx.testCase.update({ where: { id: testCase.id }, data: { ...changes, isApproved: approved } as Prisma.TestCaseUpdateInput });
+        const updated = await tx.testCase.update({ where: { id: testCase.id }, data: { ...changes, isApproved: approved, ...(codeChanged ? { baseStatus: null } : {}) } as Prisma.TestCaseUpdateInput });
         if (termsChanged) await tx.issue.update({ where: { id: initial.issueId }, data: { termsVersion: { increment: 1 } } });
+        if (codeChanged && updated.testCode) await queueBaseCheck(tx, initial.issueId);
         return updated;
       });
       return toGraphqlTestCase(updatedTestCase);

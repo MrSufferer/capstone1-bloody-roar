@@ -7,8 +7,8 @@ import type { Job, JobContext } from "../runtime/scheduler";
 async function indexerTick(ctx: JobContext): Promise<void> {
   const { db, rpc, config, log, now } = ctx;
   const reorg = await handleReorg({ db, rpc, config });
-  if (reorg) log.warn({ rewoundTo: reorg.rewoundTo }, "reorg detected; cursor rewound");
-  await scanOnce({ db, rpc, config });
+  if (reorg && "rewoundTo" in reorg) log.warn({ rewoundTo: reorg.rewoundTo }, "reorg detected; cursor rewound");
+  await scanOnce({ db, rpc, config }, reorg && "verifiedTip" in reorg ? reorg.verifiedTip : undefined);
 
   const checkpoint = await loadCheckpoint(db, config);
   if (health.lastScannedBlock !== checkpoint.lastScannedBlock) health.cursorMovedAt = now().getTime();

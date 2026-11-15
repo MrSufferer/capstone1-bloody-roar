@@ -103,7 +103,18 @@ bun run test:e2e:local
 cat tests/e2e/.run/last-run.txt
 ```
 
-Harness tự bật và tắt Hardhat, worker, web và AI mock trên các cổng 8545, 4011, 4012, 4019. Đọc `tests/e2e/.run/last-run.txt` để xem kết quả; các log nằm cùng thư mục đó.
+Harness tự bật và tắt Hardhat, worker, web và AI mock trên các cổng 18545, 4011, 4012, 4019. `E2E_RPC_PORT` đổi cổng Hardhat của harness; node chạy tay vẫn mặc định 8545. Đọc `tests/e2e/.run/last-run.txt` để xem kết quả; các log nằm cùng thư mục đó.
+
+Sau khi chạy harness, deploy lại trên node chạy tay nếu cần dùng
+`apps/contracts/deployments/localhost.json`: harness ghi manifest của chain test
+riêng. Contract mới tính review window bằng `submittedAt + 7 ngày`, cập nhật mỗi
+lần nộp lại. Không dùng ABI mới với contract cũ còn hoạt động.
+
+Để chạy test runner local, build image theo `docs/RUNBOOK.md`, đặt
+`TEST_RUNNER_ENABLED=true`, rồi restart worker. GitHub public và ZIP đều được
+pin thành snapshot trước khi sinh test; developer tải snapshot và nộp patch
+so với đúng phiên bản đó. `commitSha` là thông tin bổ sung của delivery; gate
+thực thi vẫn yêu cầu patch theo task 3.6.
 
 ## 6. Test UI tự động (E32)
 

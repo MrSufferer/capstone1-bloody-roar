@@ -3,6 +3,7 @@
 // Chỉ ghi FundingReservation và đổi trạng thái Issue. Không gọi chain.
 
 import { DAY_MS, HOUR_MS } from "@bloody-roar/shared/constants";
+import { ensureWorkConversation } from "@bloody-roar/database";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -46,7 +47,7 @@ function assertDeliveryDeadline(deliveryDeadline: Date, now: Date) {
   const time = deliveryDeadline.getTime();
   if (time < earliest || time > latest) {
     throw gqlError(
-      "Hạn giao hàng phải sau 72 giờ và không quá 180 ngày",
+      "The delivery deadline must be more than 72 hours away and within 180 days",
       "DELIVERY_DEADLINE_INVALID",
     );
   }
@@ -56,7 +57,7 @@ function assertDeliveryDeadline(deliveryDeadline: Date, now: Date) {
 function buildEscrowKey(issueId: string, sequence: number): string {
   const key = `br_${issueId}_${sequence}`;
   if (key.length > 64 || !/^[\x21-\x7e]+$/.test(key)) {
-    throw gqlError("Không tạo được khóa escrow cho bài toán này", "ESCROW_KEY_INVALID");
+    throw gqlError("Could not create an escrow key for this bounty", "ESCROW_KEY_INVALID");
   }
   return key;
 }
@@ -78,6 +79,8 @@ type TermsCriterion = {
   when: string;
   then: string;
   isApproved: boolean;
+  testCode?: string | null;
+  testFilePath?: string | null;
 };
 
 // BE-39, QĐ-22: hash này được deposit() và effect FUNDED so khớp với reservation
@@ -94,7 +97,7 @@ function reservationTermsHash(
     category: issue.category,
     acceptanceCriteria: criteria.map((criterion) => ({
       id: criterion.id,
-      text: `Given ${criterion.given}, when ${criterion.when}, then ${criterion.then}`,
+      text: `Given ${criterion.given}, when ${criterion.when}, then ${criterion.then}` + (criterion.testCode ? ` | test=${createHash("sha256").update((criterion.testFilePath ?? "") + "\n" + criterion.testCode).digest("hex")}` : ""),
       approved: criterion.isApproved,
     })),
     token: issue.token.address as Hex,
@@ -118,7 +121,7 @@ async function notifyOnce(
 
 builder.mutationField("selectDeveloper", (t) =>
   t.field({
-    description: "Client chọn một ứng viên: tạo reservation AWAITING_FUNDING (BE-23)",
+    description: "Client selects an applicant: creates an AWAITING_FUNDING reservation (BE-23)",
     type: FundingReservationRef,
     args: {
       issueId: t.arg.id({ required: true }),
@@ -147,11 +150,11 @@ builder.mutationField("selectDeveloper", (t) =>
               where: { id: input.issueId },
               include: { token: true },
             });
-            if (!issue || issue.isDraft) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
+            if (!issue || issue.isDraft) throw gqlError("Bounty not found", "NOT_FOUND");
             if (issue.clientId !== user.id)
-              throw gqlError("Chỉ chủ bài toán mới chọn được ứng viên", "FORBIDDEN");
+              throw gqlError("Only the bounty owner can select an applicant", "FORBIDDEN");
             if (issue.status !== IssueStatus.OPEN)
-              throw gqlError("Bài toán không còn nhận ứng viên", "ISSUE_NOT_OPEN");
+              throw gqlError("This bounty no longer accepts applicants", "ISSUE_NOT_OPEN");
 
             const application = await tx.application.findFirst({
               where: {
@@ -161,23 +164,23 @@ builder.mutationField("selectDeveloper", (t) =>
               },
             });
             if (!application)
-              throw gqlError("Ứng tuyển không hợp lệ cho bài toán này", "NOT_FOUND");
+              throw gqlError("This application is not valid for this bounty", "NOT_FOUND");
 
             const criteria = await tx.testCase.findMany({
               where: { issueId: issue.id },
-              select: { id: true, given: true, when: true, then: true, isApproved: true },
+              select: { id: true, given: true, when: true, then: true, isApproved: true, testCode: true, testFilePath: true },
             });
             if (!criteria.some((criterion) => criterion.isApproved))
-              throw gqlError("Cần ít nhất một tiêu chí đã được duyệt", "NO_APPROVED_CRITERIA");
+              throw gqlError("At least one approved criterion is required", "NO_APPROVED_CRITERIA");
 
             const sequence = (await tx.fundingReservation.count({ where: { issueId: issue.id } })) + 1;
             const escrowKey = buildEscrowKey(issue.id, sequence);
             const target = escrowTarget();
             if (issue.token.chainId !== target.chainId)
-              throw gqlError("Token không thuộc chain đang hoạt động", "INVALID_TOKEN");
+              throw gqlError("Token is not on the active chain", "INVALID_TOKEN");
             const contractToken = await readEscrowToken(target.contractAddress, target.chainId);
             if (contractToken.toLowerCase() !== issue.token.address.toLowerCase())
-              throw gqlError("Token không khớp escrow contract", "INVALID_TOKEN");
+              throw gqlError("Token does not match the escrow contract", "INVALID_TOKEN");
             const amountRaw = parseTokenAmount(issue.bountyAmount.toFixed(), issue.token.decimals);
 
             const reservation = await tx.fundingReservation.create({
@@ -204,8 +207,9 @@ builder.mutationField("selectDeveloper", (t) =>
               data: { status: IssueStatus.AWAITING_FUNDING },
             });
             if (moved.count !== 1)
-              throw gqlError("Bài toán vừa được chọn ứng viên khác", "ISSUE_NOT_OPEN");
+              throw gqlError("Another applicant was just selected for this bounty", "ISSUE_NOT_OPEN");
 
+            await ensureWorkConversation(tx, { id: issue.id, clientId: user.id, developerId: application.developerId });
             return { reservation, issue: { id: issue.id, title: issue.title } };
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -213,9 +217,9 @@ builder.mutationField("selectDeveloper", (t) =>
       } catch (error) {
         if (typeof error === "object" && error !== null && "code" in error) {
           if (error.code === "P2002")
-            throw gqlError("Bài toán đã có reservation đang hoạt động", "ISSUE_ALREADY_RESERVED");
+            throw gqlError("This bounty already has an active reservation", "ISSUE_ALREADY_RESERVED");
           if (error.code === "P2034")
-            throw gqlError("Trạng thái bài toán vừa đổi, vui lòng thử lại", "ISSUE_NOT_OPEN");
+            throw gqlError("The bounty status just changed, please try again", "ISSUE_NOT_OPEN");
         }
         throw error;
       }
@@ -224,8 +228,8 @@ builder.mutationField("selectDeveloper", (t) =>
         dedupeKey: `reservation:${result.reservation.id}:FUNDING_REQUIRED`,
         userId: result.reservation.developerId,
         type: "FUNDING_REQUIRED",
-        title: "Cần nạp ký quỹ",
-        body: `Khách hàng đã chọn bạn cho “${result.issue.title}”. Hãy nạp ký quỹ trong 24 giờ.`,
+        title: "Escrow funding needed",
+        body: `The client selected you for “${result.issue.title}”. Funding is due within 24 hours.`,
         actorId: user.id,
         link: `/issues/${result.issue.id}`,
         data: { issueId: result.issue.id, reservationId: result.reservation.id },
@@ -237,7 +241,7 @@ builder.mutationField("selectDeveloper", (t) =>
 
 builder.mutationField("cancelReservation", (t) =>
   t.field({
-    description: "Client hủy reservation đang chờ nạp ký quỹ; bài toán về OPEN (BE-38)",
+    description: "Client cancels a reservation awaiting funding; the bounty returns to OPEN (BE-38)",
     type: FundingReservationRef,
     args: { reservationId: t.arg.id({ required: true }) },
     resolve: async (_root, args, ctx) => {
@@ -245,9 +249,9 @@ builder.mutationField("cancelReservation", (t) =>
       const reservation = await ctx.db.fundingReservation.findUnique({
         where: { id: String(args.reservationId) },
       });
-      if (!reservation) throw gqlError("Reservation không tồn tại", "NOT_FOUND");
+      if (!reservation) throw gqlError("Reservation not found", "NOT_FOUND");
       if (reservation.clientId !== user.id)
-        throw gqlError("Chỉ khách hàng mới hủy được reservation", "FORBIDDEN");
+        throw gqlError("Only the client can cancel the reservation", "FORBIDDEN");
 
       return ctx.db.$transaction(async (tx) => {
         const cancelled = await tx.fundingReservation.updateMany({
@@ -255,7 +259,7 @@ builder.mutationField("cancelReservation", (t) =>
           data: { status: ReservationStatus.CANCELLED },
         });
         if (cancelled.count !== 1)
-          throw gqlError("Reservation không còn chờ nạp ký quỹ", "RESERVATION_NOT_CANCELLABLE");
+          throw gqlError("The reservation is no longer awaiting funding", "RESERVATION_NOT_CANCELLABLE");
         await tx.issue.updateMany({
           where: { id: reservation.issueId, status: IssueStatus.AWAITING_FUNDING },
           data: { status: IssueStatus.OPEN },

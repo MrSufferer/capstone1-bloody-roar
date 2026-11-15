@@ -1,5 +1,6 @@
 "use client";
 
+import { useToastState } from "@/lib/toast";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { BarChart3, ExternalLink, Search, ShieldAlert, Users } from "lucide-react";
@@ -47,7 +48,7 @@ type DraftForm = { kind: "INITIAL" | "FINAL"; clientPercent: string; rationale: 
 export function AdminView() {
   const user = useAuthStore((state) => state.user);
   const authStatus = useAuthStore((state) => state.status);
-  const { language, t, theme } = useUiPreferences();
+  const { t, theme } = useUiPreferences();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [disputes, setDisputes] = useState<AdminDispute[]>([]);
@@ -62,35 +63,51 @@ export function AdminView() {
   const [hideReasons, setHideReasons] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [, setError] = useToastState("error");
+  const [, setNotice] = useToastState("success");
 
-  const load = useCallback(async (term: string) => {
+  const load = useCallback(async (term: string, includeUsers = true) => {
     setLoading(true); setError(null);
     try {
       const [statsData, usersData, disputesData, issuesData] = await Promise.all([
         graphqlRequest<{ adminStats: Omit<AdminStats, "completedBounties"> & { completedBounties: Array<{ symbol: string; formatted: string }> } }>(ADMIN_STATS),
-        graphqlRequest<{ adminUsers: AdminUser[] }>(ADMIN_USERS, { search: term || undefined, first: 40 }),
+        includeUsers ? graphqlRequest<{ adminUsers: AdminUser[] }>(ADMIN_USERS, { search: term || undefined, first: 40 }) : Promise.resolve(null),
         graphqlRequest<{ adminDisputes: AdminDispute[] }>(ADMIN_DISPUTES),
         graphqlRequest<{ adminIssues: AdminIssue[] }>(ADMIN_ISSUES),
       ]);
       const raw = statsData.adminStats;
       setStats({ ...raw, completedBounties: raw.completedBounties.map((row) => ({ symbol: row.symbol, amount: Number(row.formatted) })) });
-      setUsers(usersData.adminUsers); setDisputes(disputesData.adminDisputes); setIssues(issuesData.adminIssues);
+      if (usersData) setUsers(usersData.adminUsers);
+      setDisputes(disputesData.adminDisputes); setIssues(issuesData.adminIssues);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load administrator data."); }
     finally { setLoading(false); }
-  }, []);
+  }, [setError]);
 
   const loadOps = useCallback(async () => {
     try { setOps(await graphqlRequest<OpsData>(OPS_QUERY)); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load operations data."); }
-  }, []);
+  }, [setError]);
+
+  const loadUsers = useCallback(async (term: string, signal: AbortSignal) => {
+    try {
+      const result = await graphqlRequest<{ adminUsers: AdminUser[] }>(ADMIN_USERS, { search: term || undefined, first: 40 }, signal);
+      if (!signal.aborted) setUsers(result.adminUsers);
+    } catch (reason) {
+      if (!signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load users.");
+    }
+  }, [setError]);
 
   useEffect(() => {
     if (!user || user.role !== "ADMIN") { setLoading(false); return; }
-    const timer = window.setTimeout(() => void load(search.trim()), search ? 250 : 0);
-    return () => window.clearTimeout(timer);
-  }, [load, search, user]);
+    void load("", false);
+  }, [load, user]);
+
+  useEffect(() => {
+    if (!user || user.role !== "ADMIN") return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => void loadUsers(search.trim(), controller.signal), search ? 250 : 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [loadUsers, search, user]);
 
   useEffect(() => {
     if (tab === "ops" && user?.role === "ADMIN") void loadOps();
@@ -180,8 +197,6 @@ export function AdminView() {
     <div className={`br min-h-screen ${theme === "dark" ? "dark" : ""}`}>
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 animate-fade-in">
         <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand)]">{t("operations")}</p><h1 className="mt-1 font-outfit text-3xl font-bold text-[var(--ink)]">{t("admin")}</h1><p className="mt-1 text-sm text-[var(--ink-3)]">{t("manageAccounts")}</p></div>
-      {error && <p role="alert" className="mt-5 rounded-lg border border-[hsl(var(--destructive)/0.35)] bg-[hsl(var(--destructive)/0.08)] p-3 text-sm text-[hsl(var(--destructive))]">{error}</p>}
-      {notice && <p role="status" className="mt-5 rounded-lg border border-[hsl(var(--success)/0.35)] bg-[hsl(var(--success)/0.08)] p-3 text-sm text-[hsl(var(--success))]">{notice}</p>}
 
       {stats && <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6 animate-fade-in">
         <Metric label={t("activeUsers")} value={stats.users} icon={<Users className="h-4 w-4" />} />
@@ -199,10 +214,10 @@ export function AdminView() {
 
       {tab === "ops" ? <OpsPanel ops={ops} onRefresh={() => void loadOps()} /> : <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
         <section className="overflow-hidden glass rounded-xl animate-fade-in">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[hsl(var(--border))] p-4 sm:p-5"><div><h2 className="font-semibold">{t("accounts")}</h2><p className="text-xs text-[hsl(var(--foreground-muted))]">{users.length} {t("matchingAccounts")}</p></div><div className="relative w-full sm:max-w-xs"><Search className="absolute left-3 top-3 h-4 w-4 text-[hsl(var(--foreground-subtle))]" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={language === "vi" ? "Ví hoặc tên GitHub" : "Wallet or GitHub handle"} className="pl-9" /></div></header>
+          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[hsl(var(--border))] p-4 sm:p-5"><div><h2 className="font-semibold">{t("accounts")}</h2><p className="text-xs text-[hsl(var(--foreground-muted))]">{users.length} {t("matchingAccounts")}</p></div><div className="relative w-full sm:max-w-xs"><Search className="absolute left-3 top-3 h-4 w-4 text-[hsl(var(--foreground-subtle))]" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={"Wallet or GitHub handle"} className="pl-9" /></div></header>
           {loading ? <RowsSkeleton /> : <div className="divide-y divide-[hsl(var(--border))]">{users.map((account) => <article key={account.id} className="p-4 sm:p-5 hover:bg-[hsl(var(--background-secondary)/0.5)] transition-colors">
             <div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-medium">{account.name || account.walletAddress.slice(0, 12)}</p><Badge variant={account.isBanned ? "danger" : "secondary"}>{account.isBanned ? "Suspended" : account.role}</Badge>{account.isGithubVerified && <span className="text-xs text-[hsl(var(--success))]">GitHub @{account.githubUsername}</span>}</div><p className="mt-1 break-all font-mono text-[10px] text-[hsl(var(--foreground-subtle))]">{account.walletAddress}</p>{account.bannedReason && <p className="mt-1 text-xs text-[hsl(var(--destructive))]">{account.bannedReason}</p>}</div>
-              {account.isBanned ? <Button size="sm" variant="outline" disabled={working === account.id} onClick={() => void unbanUser(account)}>{t("restore")}</Button> : <div className="flex w-full gap-2 sm:w-auto"><Input value={banReasons[account.id] ?? ""} maxLength={500} onChange={(event) => setBanReasons((current) => ({ ...current, [account.id]: event.target.value }))} placeholder={language === "vi" ? "Lý do tạm khóa" : "Reason to suspend"} className="h-8 text-xs" /><Button size="sm" variant="destructive" disabled={working === account.id || account.id === user.id} onClick={() => void banUser(account)}>{t("suspend")}</Button></div>}
+              {account.isBanned ? <Button size="sm" variant="outline" disabled={working === account.id} onClick={() => void unbanUser(account)}>{t("restore")}</Button> : <div className="flex w-full gap-2 sm:w-auto"><Input value={banReasons[account.id] ?? ""} maxLength={500} onChange={(event) => setBanReasons((current) => ({ ...current, [account.id]: event.target.value }))} placeholder={"Reason to suspend"} className="h-8 text-xs" /><Button size="sm" variant="destructive" disabled={working === account.id || account.id === user.id} onClick={() => void banUser(account)}>{t("suspend")}</Button></div>}
             </div>
           </article>)}{users.length === 0 && <p className="p-8 text-center text-sm text-[hsl(var(--foreground-muted))]">{t("noAccounts")}</p>}</div>}
           <header className="border-t border-b border-[hsl(var(--border))] p-4 sm:p-5"><h2 className="font-semibold">Tasks</h2><p className="text-xs text-[hsl(var(--foreground-muted))]">Hide a task from the marketplace; the escrow is not touched.</p></header>

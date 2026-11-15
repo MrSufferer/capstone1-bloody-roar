@@ -1,0 +1,50 @@
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { prisma } from "@bloody-roar/database";
+import { assertTestDatabase } from "@bloody-roar/database/test-guard";
+import { loadConfig } from "../src/config";
+import { sourceSnapshotJob } from "../src/jobs/source-snapshot";
+import { command } from "../src/runner/command";
+import { extractArchive, runInSandbox } from "../src/runner/sandbox";
+
+let root = "", issueId = "", userId = "", tokenId = "";
+beforeAll(() => { if (process.env.GITHUB_TESTS) assertTestDatabase(process.env.TEST_DATABASE_URL); });
+afterAll(async () => {
+  if (issueId) await prisma.issue.delete({ where: { id: issueId } });
+  if (tokenId) await prisma.token.delete({ where: { id: tokenId } });
+  if (userId) await prisma.user.delete({ where: { id: userId } });
+  if (root) await rm(root, { recursive: true, force: true });
+  await prisma.$disconnect();
+});
+test.skipIf(!process.env.GITHUB_TESTS)("snapshots a public GitHub project and verifies a metadata fix in Docker", async () => {
+  const address = () => `0x${randomBytes(20).toString("hex")}`;
+  root = await mkdtemp(path.join(tmpdir(), "br-public-"));
+  userId = (await prisma.user.create({ data: { walletAddress: address(), role: "CLIENT" } })).id;
+  tokenId = (await prisma.token.create({ data: { name: "Public source", symbol: "PUB", address: address(), chainId: 31337, decimals: 6 } })).id;
+  issueId = (await prisma.issue.create({ data: { clientId: userId, tokenId, title: "Rename package metadata", description: "The package.json name should be bloodyroar-fixture.", category: "BUG_FIX", bountyAmount: "100", requiredSkills: [] } })).id;
+  await prisma.sourceSnapshot.create({ data: { issueId, repoUrl: "https://github.com/unjs/pathe", ref: "v2.0.3" } });
+  const config = loadConfig({ RPC_URL: "http://localhost:8545", CHAIN_ID: "31337", ESCROW_ADDRESS: address(), ESCROW_DEPLOY_BLOCK: "0", DATABASE_URL: process.env.TEST_DATABASE_URL!, TEST_RUNNER_ENABLED: "true", SNAPSHOT_DIR: root });
+  await sourceSnapshotJob.run({ db: prisma, config, rpc: {} as never, now: () => new Date(), log: { info() {}, warn() {}, error() {} } });
+  const snapshot = await prisma.sourceSnapshot.findUniqueOrThrow({ where: { issueId } });
+  expect(snapshot.status, snapshot.error ?? "").toBe("READY");
+  expect(snapshot.commitSha).toMatch(/^[a-f0-9]{40}$/);
+  // This annotated tag points at a tag object; metadata must pin the underlying commit.
+  expect(snapshot.commitSha).toBe("614844ba1f7f34f051959f3d1a953c54eaeaf3b2");
+  const work = path.join(root, "work"); await mkdir(work); await extractArchive(snapshot.storagePath!, work);
+  const original = await readFile(path.join(work, "package.json"), "utf8");
+  const expected = "bloodyroar-fixture";
+  expect(JSON.parse(original).name).not.toBe(expected);
+  const input = { snapshotPath: snapshot.storagePath!, files: [{ id: "package-name", path: "__bloodyroar__/package.test.ts", code: `import {test,expect} from 'vitest'; import pkg from '../package.json'; test('[TC:package-name] package name',()=>expect(pkg.name).toBe('${expected}'));` }], framework: "VITEST" as const, installCommand: snapshot.installCommand!, timeoutMs: 60_000 };
+  const red = await runInSandbox(input);
+  expect(red.status, red.log).toBe("failed");
+  expect(red.results).toMatchObject([{ testCaseId: "package-name", status: "failed" }]);
+  expect(red.results[0]?.message).not.toBe("No result");
+  const fixed = path.join(root, "fixed.json"); await writeFile(fixed, original.replace(/"name"\s*:\s*"[^"]*"/, `"name": "${expected}"`));
+  const diff = await command(["diff", "-u", "--label", "a/package.json", "--label", "b/package.json", path.join(work, "package.json"), fixed], root);
+  const patchPath = path.join(root, "fix.patch"); await writeFile(patchPath, diff.log);
+  const green = await runInSandbox({ ...input, patchPath });
+  expect(green.status, green.log + "\n" + JSON.stringify(green.results)).toBe("passed");
+}, 540_000);

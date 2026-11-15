@@ -1,10 +1,12 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState } from "react";
 import { LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ConnectModal } from "./connect-modal";
 import { useAuthStore } from "@/lib/store/use-auth-store";
+
+const ConnectModal = dynamic(() => import("./connect-modal").then((m) => m.ConnectModal), { ssr: false });
 
 type AuthRequiredPanelProps = {
   title: string;
@@ -39,7 +41,7 @@ export function AuthRequiredPanel({
       <Button className="mt-5" onClick={() => setOpen(true)}>
         {actionLabel}
       </Button>
-      <ConnectModal isOpen={open} onClose={() => setOpen(false)} />
+      {open && <ConnectModal isOpen onClose={() => setOpen(false)} />}
     </section>
   );
 }

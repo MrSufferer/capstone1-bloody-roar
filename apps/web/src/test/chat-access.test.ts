@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canReadIssueChat, canWriteIssueChat } from "../lib/chat-access";
+import { canReadIssueChat, canWriteIssueChat, canReadConversation, canWriteConversation } from "../lib/chat-access";
 
 const client = { id: "client-1", role: "CLIENT" };
 const developer = { id: "dev-1", role: "DEVELOPER" };
@@ -45,5 +45,29 @@ describe("task chat access", () => {
     expect(canReadIssueChat({ clientId: client.id, developerId: developer.id, status: "IN_PROGRESS" }, admin)).toBe(false);
     expect(canReadIssueChat({ clientId: client.id, developerId: developer.id, status: "COMPLETED" }, admin)).toBe(false);
     expect(canWriteIssueChat({ clientId: client.id, developerId: developer.id, status: "DISPUTED" }, admin)).toBe(false);
+  });
+});
+
+
+describe("conversation permission matrix", () => {
+  it.each([
+    ["OPEN", "PENDING", client, true, true, true],
+    ["OPEN", "PENDING", developer, true, true, true],
+    ["OPEN", "PENDING", outsider, false, false, false],
+    ["OPEN", "PENDING", admin, false, false, false],
+    ["OPEN", "WITHDRAWN", developer, true, true, false],
+    ["IN_PROGRESS", "REJECTED", developer, true, true, false],
+    ["COMPLETED", "ACCEPTED", client, true, true, false],
+  ] as const)("application %s/%s for %j", (status, applicationStatus, actor, participant, read, write) => {
+    const issue = { clientId: client.id, developerId: null, status };
+    const application = { status: applicationStatus, developerId: developer.id };
+    expect(canReadConversation({ kind: "APPLICATION" }, issue, application, actor, participant)).toBe(read);
+    expect(canWriteConversation({ kind: "APPLICATION" }, issue, application, actor, participant)).toBe(write);
+  });
+  it("requires work membership and lets disputed admins read without membership", () => {
+    const issue = { clientId: client.id, developerId: developer.id, status: "DISPUTED" };
+    expect(canReadConversation({ kind: "ISSUE_WORK" }, issue, null, client, false)).toBe(false);
+    expect(canReadConversation({ kind: "ISSUE_WORK" }, issue, null, admin, false)).toBe(true);
+    expect(canWriteConversation({ kind: "ISSUE_WORK" }, issue, null, admin, false)).toBe(false);
   });
 });

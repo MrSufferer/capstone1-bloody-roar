@@ -1353,6 +1353,11 @@ export const ESCROW_ABI = [
             "internalType": "enum BloodyRoarEscrow.ResolutionKind",
             "name": "resolutionKind",
             "type": "uint8"
+          },
+          {
+            "internalType": "uint256",
+            "name": "submittedAt",
+            "type": "uint256"
           }
         ],
         "internalType": "struct BloodyRoarEscrow.Escrow",

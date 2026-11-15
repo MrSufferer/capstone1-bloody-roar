@@ -4,10 +4,11 @@ import type { Server } from "socket.io";
 const { verifyJWT, prisma, tx } = vi.hoisted(() => {
   const tx = {
     issue: { findUnique: vi.fn() },
+    conversation: { findFirst: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn().mockResolvedValue({ lastMessageAt: null }), update: vi.fn() },
     $queryRaw: vi.fn().mockResolvedValue([]),
     notification: { create: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     message: { create: vi.fn(), findFirst: vi.fn().mockResolvedValue(null), findUniqueOrThrow: vi.fn() },
-    attachment: { create: vi.fn() },
+    attachment: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     dispute: { findUnique: vi.fn(async (_args?: unknown) => null as { raisedAt: Date } | null) },
   };
   const prisma = {
@@ -62,6 +63,8 @@ function asUser(id: string) {
   const issue = { clientId: id, developerId: "dev-1", status: "IN_PROGRESS", title: "Build" };
   prisma.issue.findUnique.mockResolvedValue(issue);
   tx.issue.findUnique.mockResolvedValue(issue);
+  const room = { id: "conv-1", issueId: "issue-1", kind: "ISSUE_WORK", issue, application: null, participants: [{ userId: id, role: "CLIENT" }, { userId: "dev-1", role: "DEVELOPER" }] };
+  tx.conversation.findFirst.mockResolvedValue(room); tx.conversation.findUnique.mockResolvedValue(room);
 }
 
 beforeEach(() => {
@@ -75,6 +78,7 @@ beforeEach(() => {
     type: "TEXT",
     issueId: "issue-1",
     senderId: "rl-user",
+    sender: { id: "rl-user", name: "Client", avatar: null },
     wasModified: false,
     createdAt: new Date(),
     attachments: [],
@@ -114,7 +118,7 @@ describe("message notifications", () => {
     const send = connectSocket();
     asUser("notification-user");
     await send({}, vi.fn());
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(prisma.notification.updateMany).toHaveBeenCalledWith({ where: { userId: "dev-1", type: "MESSAGE_RECEIVED", isRead: false, link: "/issues/issue-1" }, data: { isRead: true } });
     expect(prisma.notification.create).toHaveBeenCalledTimes(1);
   });
@@ -125,6 +129,8 @@ describe("socket message:send after a dispute", () => {
     const send = connectSocket();
     asUser("rl-dispute");
     tx.dispute.findUnique.mockResolvedValueOnce({ raisedAt: new Date(Date.now() - 60_000) });
+    const issue = { clientId: "rl-dispute", developerId: "dev-1", status: "DISPUTED", title: "Build" };
+    tx.conversation.findUnique.mockResolvedValue({ id: "conv-1", issueId: "issue-1", kind: "ISSUE_WORK", issue, application: null, participants: [{ userId: "rl-dispute", role: "CLIENT" }, { userId: "dev-1", role: "DEVELOPER" }] });
 
     const callback = vi.fn();
     await send({}, callback);

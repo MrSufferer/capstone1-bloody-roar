@@ -10,7 +10,7 @@ export type ScanResult = { from: bigint; to: bigint; events: number };
 // after successful calls. Module state, so it lasts for the life of the worker process.
 let rangeWindow: number | null = null;
 
-export async function scanOnce({ db, rpc, config }: ScanDeps): Promise<ScanResult | null> {
+export async function scanOnce({ db, rpc, config }: ScanDeps, verifiedTip?: { number: bigint; hash: string }): Promise<ScanResult | null> {
   const checkpoint = await loadCheckpoint(db, config);
   const safe = await getSafeBlock(rpc, config.finality);
   if (!safe) return null;
@@ -40,6 +40,17 @@ export async function scanOnce({ db, rpc, config }: ScanDeps): Promise<ScanResul
   // The stored hash is the hash of `to`; handleReorg compares it at lastScannedBlock.
   const toBlock = await getBlockByNumber(rpc, to);
   if (!toBlock) return null;
+  const canonicalBlockHashes: Record<string, string> = {};
+  const cachedHashes = verifiedTip?.number === checkpoint.lastScannedBlock && verifiedTip.hash === checkpoint.lastCanonicalBlockHash
+    ? checkpoint.canonicalBlockHashes as Record<string, string> : {};
+  const boundary = to - BigInt(config.reorgWindow);
+  for (let n = boundary > config.escrowDeployBlock ? boundary : config.escrowDeployBlock; n <= to; n++) {
+    const cached = n <= checkpoint.lastScannedBlock ? cachedHashes[n.toString()] : undefined;
+    if (cached) { canonicalBlockHashes[n.toString()] = cached; continue; }
+    const block = n === to ? toBlock : await getBlockByNumber(rpc, n);
+    if (!block) throw new Error(`RPC returned no block for ${n}`);
+    canonicalBlockHashes[n.toString()] = block.hash;
+  }
 
   const ordered = [...logs].sort((a, b) => {
     const block = BigInt(a.blockNumber) - BigInt(b.blockNumber);
@@ -63,7 +74,7 @@ export async function scanOnce({ db, rpc, config }: ScanDeps): Promise<ScanResul
     for (const log of ordered) await projectLog(tx, config, log, blocks.get(log.blockNumber)!.timestamp);
     await tx.projectionCheckpoint.update({
       where: checkpointKey(config),
-      data: { lastScannedBlock: to, lastSafeBlock: safe.number, lastCanonicalBlockHash: toBlock.hash, decoderVersion: DECODER_VERSION, ...(to === safe.number && checkpoint.replayStatus === "REPLAY_REQUESTED" ? { replayStatus: "IDLE" } : {}) },
+      data: { lastScannedBlock: to, lastSafeBlock: safe.number, lastCanonicalBlockHash: toBlock.hash, canonicalBlockHashes, reorgAlerted: false, decoderVersion: DECODER_VERSION, ...(to === safe.number && checkpoint.replayStatus === "REPLAY_REQUESTED" ? { replayStatus: "IDLE" } : {}) },
     });
   }, { timeout: 30_000 });
 

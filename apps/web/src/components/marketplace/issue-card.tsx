@@ -6,7 +6,7 @@
 import React from "react";
 import Link from "next/link";
 import { issueStatus, type IssueStatusKey } from "../../lib/issue-status";
-import { shortenAddress } from "../../lib/web3/client";
+import { shortenAddress } from "../../lib/utils";
 
 export interface IssueItem {
   id: string;

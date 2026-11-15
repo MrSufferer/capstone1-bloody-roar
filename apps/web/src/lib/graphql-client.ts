@@ -36,14 +36,14 @@ export async function graphqlRequest<T>(
       const issue = payload.errors[0];
       if (issue) throw new GraphQLRequestError(issue);
     }
-    if (!payload.data) throw new Error("Phản hồi GraphQL không hợp lệ.");
+    if (!payload.data) throw new Error("Invalid GraphQL response.");
     return payload.data;
   } catch (error) {
     if (error instanceof GraphQLRequestError) throw error;
     if (axios.isAxiosError<{ errors?: GraphQLIssue[]; error?: string }>(error)) {
       const issue = error.response?.data?.errors?.[0];
       if (issue) throw new GraphQLRequestError(issue);
-      throw new Error(error.response?.data?.error ?? "Không thể kết nối máy chủ.");
+      throw new Error(error.response?.data?.error ?? "Could not reach the server.");
     }
     throw error;
   }

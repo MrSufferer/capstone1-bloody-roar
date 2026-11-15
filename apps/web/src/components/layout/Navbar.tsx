@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Search, Plus } from "lucide-react";
+import { MessagesLink } from "@/components/chat/messages-link";
+import { Plus } from "lucide-react";
 import { UserMenu } from "@/components/layout/user-menu";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { GlobalSearch } from "@/components/layout/global-search";
 import { NotificationsMenu } from "@/components/layout/notifications-menu";
 import { useAuthStore } from "@/lib/store/use-auth-store";
 import { useUiPreferences } from "@/lib/ui-preferences";
@@ -45,10 +47,10 @@ export function Navbar() {
               {t("marketplace")}
             </Link>
             <Link
-              href="/#rules"
+              href="/guide"
               className=""
             >
-              How it works
+              Guide
             </Link>
             {isMounted && user && (
               <Link
@@ -61,19 +63,11 @@ export function Navbar() {
           </nav>
         </div>
 
-        {/* Search input bar */}
-        <form action="/marketplace" method="get" className="search hidden md:flex min-w-[200px] max-w-sm lg:max-w-md">
-          <Search className="ico text-[var(--ink-3)]" />
-          <input
-            type="search"
-            name="search"
-            placeholder={t("searchTasks") || "Search bounties by skill, keyword, or client..."}
-            defaultValue=""
-          />
-        </form>
+        <GlobalSearch />
 
         {/* Right side controls */}
         <div className="tb-r ml-auto flex items-center gap-3">
+          <MessagesLink />
           <div className="hidden sm:block">
             <NotificationsMenu />
           </div>

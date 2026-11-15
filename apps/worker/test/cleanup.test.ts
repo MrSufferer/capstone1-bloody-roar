@@ -1,8 +1,11 @@
+import { describe } from "bun:test";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { prisma } from "@bloody-roar/database";
 import { cleanupJob } from "../src/jobs/cleanup";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 const hex = (n: number) => `0x${randomBytes(n).toString("hex")}`;
 const now = new Date("2031-01-01T12:00:00Z");
@@ -60,4 +63,6 @@ test("cleanup removes only expired sessions, abandoned uploads and old webhook d
 
   expect(await prisma.githubWebhookDelivery.findUnique({ where: { deliveryId: oldDelivery.deliveryId } })).toBeNull();
   expect(await prisma.githubWebhookDelivery.findUnique({ where: { deliveryId: newDelivery.deliveryId } })).not.toBeNull();
+});
+
 });

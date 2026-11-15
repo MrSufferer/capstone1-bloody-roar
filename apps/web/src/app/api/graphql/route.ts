@@ -3,6 +3,7 @@ import { createYoga, type Plugin } from "graphql-yoga";
 import { schema } from "../../../graphql/schema";
 import { createContext } from "../../../graphql/context";
 import { guardsPlugin, MAX_BODY_BYTES, operationCost } from "../../../graphql/yoga-guards";
+import { clearAuthCache } from "../../../lib/auth";
 import { logger } from "../../../lib/logger";
 import { clientIp, rateLimit, tooManyRequests } from "../../../lib/rate-limit";
 import { requestIdFrom, withRequestId } from "../../../lib/request-context";
@@ -15,9 +16,12 @@ const GRAPHQL_POINTS_PER_MINUTE = 600;
 const logOperations: Plugin = {
   onExecute({ args }) {
     const started = performance.now();
-    const operation = getOperationAST(args.document, args.operationName)?.name?.value ?? "anonymous";
+    const ast = getOperationAST(args.document, args.operationName);
+    const operation = ast?.name?.value ?? "anonymous";
     return {
       onExecuteDone({ result }) {
+        // Mutations can change the user row or revoke sessions; never serve a cached user after one.
+        if (ast?.operation === "mutation") clearAuthCache();
         const errors = "errors" in result ? result.errors?.map((error) => error.message) : undefined;
         logger.info({ operation, durationMs: Math.round(performance.now() - started), errors }, "graphql operation");
       },

@@ -10,37 +10,37 @@ const day = 24 * hour;
 // now is supplied by the caller so deadline boundaries can be tested without changing the clock.
 export function availableActions(p: Projection, now: Date, ruling: Ruling | null = null): AvailableAction[] {
   const actions: AvailableAction[] = [];
-  const add = (action: string, enabled: boolean, enabledAt: Date | null = null, reason = "Điều kiện chưa được đáp ứng") => {
+  const add = (action: string, enabled: boolean, enabledAt: Date | null = null, reason = "Conditions are not met yet") => {
     actions.push({ action, enabledAt: enabledAt?.toISOString() ?? null, reasonDisabled: enabled ? null : reason });
   };
   const timed = (action: string, at: Date | null, strict = false) => {
-    if (!at) { add(action, false, null, "Chưa có mốc thời gian on-chain"); return; }
+    if (!at) { add(action, false, null, "No on-chain timestamp yet"); return; }
     const enabledAt = strict ? new Date(at.getTime() + 1000) : at;
-    add(action, now >= enabledAt, enabledAt, "Chưa đến thời hạn");
+    add(action, now >= enabledAt, enabledAt, "The deadline has not been reached");
   };
   if (p.phase === "NONE" || p.phase === "RESOLVED") return actions;
   if (p.settlementProposer) { add("revokeSettlement", true); add("acceptSettlement", true); }
   else add("proposeSettlement", true);
   if (p.phase === "FUNDED") {
-    add("submitWork", now.getTime() <= p.deliveryDeadline.getTime(), null, "Đã hết hạn giao hàng");
-    add("releaseFunds", !!p.deliveryHash, null, "Chưa có bài giao on-chain");
+    add("submitWork", now.getTime() <= p.deliveryDeadline.getTime(), null, "The delivery deadline has passed");
+    add("releaseFunds", !!p.deliveryHash, null, "No delivery on-chain yet");
     if (p.deliveryHash) timed("claimReviewTimeout", p.reviewDeadline);
     else timed("claimMissedDeliveryRefund", p.deliveryDeadline, true);
     add("raiseDispute", true);
   } else if (p.phase === "DISPUTED") {
     const evidenceEnd = p.disputeRaisedAt ? new Date(p.disputeRaisedAt.getTime() + ESCROW_CONSTANTS.EVIDENCE_HOURS * hour) : null;
-    add("submitCounterpartyEvidence", !!evidenceEnd && now < evidenceEnd && !p.counterpartyEvidenceHash, null, "Hết hạn hoặc đã nộp bằng chứng");
+    add("submitCounterpartyEvidence", !!evidenceEnd && now < evidenceEnd && !p.counterpartyEvidenceHash, null, "Expired or evidence already submitted");
     if (evidenceEnd && p.disputeRaisedAt) {
       const stall = new Date(p.disputeRaisedAt.getTime() + ESCROW_CONSTANTS.ARBITER_STALL_DAYS * day);
-      add("postInitialRuling", now >= evidenceEnd && now < stall, evidenceEnd, "Chưa đến hạn hoặc đã quá hạn phán quyết");
-    } else add("postInitialRuling", false, null, "Chưa có mốc tranh chấp on-chain");
+      add("postInitialRuling", now >= evidenceEnd && now < stall, evidenceEnd, "Ruling window not open yet or already closed");
+    } else add("postInitialRuling", false, null, "No on-chain dispute timestamp yet");
     timed("finalizeArbiterTimeoutSplit", p.disputeRaisedAt ? new Date(p.disputeRaisedAt.getTime() + ESCROW_CONSTANTS.ARBITER_STALL_DAYS * day) : null);
   } else if (p.phase === "INITIAL_RULING") {
-    add("challengeRuling", !!ruling && now < ruling.noticeEndsAt, null, "Hết hạn hoặc chưa có phán quyết");
+    add("challengeRuling", !!ruling && now < ruling.noticeEndsAt, null, "Expired or no ruling yet");
     timed("finalizeRuling", ruling?.noticeEndsAt ?? null);
   } else if (p.phase === "CHALLENGED") {
     const stall = p.challengedAt ? new Date(p.challengedAt.getTime() + ESCROW_CONSTANTS.ARBITER_STALL_DAYS * day) : null;
-    add("postFinalRuling", !!stall && now < stall, null, "Đã hết hạn hoặc thiếu mốc kháng cáo");
+    add("postFinalRuling", !!stall && now < stall, null, "Expired or the appeal timestamp is missing");
     timed("finalizeArbiterTimeoutSplit", stall);
   } else if (p.phase === "FINAL_RULING") {
     timed("finalizeRuling", ruling?.noticeEndsAt ?? null);

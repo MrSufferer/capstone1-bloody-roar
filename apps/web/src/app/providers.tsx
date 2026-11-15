@@ -6,6 +6,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAuthStore } from "@/lib/store/use-auth-store";
+import { Toaster } from "@/components/ui/toaster";
 import { UiPreferencesProvider } from "@/lib/ui-preferences";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -29,9 +30,16 @@ export function Providers({ children }: { children: ReactNode }) {
     void restoreSession();
   }, [restoreSession]);
 
+  useEffect(() => useAuthStore.subscribe((state, previous) => {
+    if (previous.user && !state.user) {
+      queryClient.removeQueries({ queryKey: ["issue-detail"] });
+      queryClient.removeQueries({ queryKey: ["notifications"] });
+    }
+  }), [queryClient]);
+
   return (
     <UiPreferencesProvider>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{children}<Toaster /></QueryClientProvider>
     </UiPreferencesProvider>
   );
 }

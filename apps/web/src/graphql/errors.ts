@@ -25,7 +25,7 @@ export function parseOrThrow<T>(
   const result = schema.safeParse(data);
   if (!result.success) {
     throw gqlError(
-      "Dữ liệu đầu vào không hợp lệ",
+      "Invalid input",
       "BAD_USER_INPUT",
       result.error.flatten()
     );

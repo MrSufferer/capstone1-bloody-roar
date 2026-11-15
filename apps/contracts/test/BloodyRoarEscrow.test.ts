@@ -313,10 +313,11 @@ describe("BloodyRoarEscrow", () => {
       expect(await escrow.claimable(feeRecipient.address)).to.equal(0);
     });
 
-    it("starts review timeout at the delivery deadline and permits permissionless resolution", async () => {
+    it("starts review timeout at the latest submission and permits permissionless resolution", async () => {
       const deadline = await deposit("review", USDC(100), 100);
       await escrow.connect(developer).submitWork("review", hash("delivery"));
-      const reviewDeadline = deadline + 7n * BigInt(DAY);
+      const submittedAt = BigInt(await time.latest());
+      const reviewDeadline = submittedAt + 7n * BigInt(DAY);
       await time.setNextBlockTimestamp(reviewDeadline - 1n);
       await expect(escrow.claimReviewTimeout("review")).to.be.revertedWithCustomError(
         escrow,
@@ -326,6 +327,19 @@ describe("BloodyRoarEscrow", () => {
       await escrow.connect(outsider).claimReviewTimeout("review");
       expect(await escrow.claimable(developer.address)).to.equal(USDC(97.5));
       expect(await escrow.claimable(feeRecipient.address)).to.equal(USDC(2.5));
+    });
+
+    it("resets the review window on resubmission and can resolve before the delivery deadline", async () => {
+      await deposit("resubmit-review", USDC(100), 30 * DAY);
+      await escrow.connect(developer).submitWork("resubmit-review", hash("first"));
+      const first = await time.latest();
+      await time.setNextBlockTimestamp(first + 2 * DAY);
+      await escrow.connect(developer).submitWork("resubmit-review", hash("second"));
+      await time.setNextBlockTimestamp(first + 7 * DAY);
+      await expect(escrow.claimReviewTimeout("resubmit-review")).to.be.revertedWithCustomError(escrow, "ReviewWindowNotReached");
+      await time.setNextBlockTimestamp(first + 9 * DAY);
+      await escrow.connect(outsider).claimReviewTimeout("resubmit-review");
+      expect(await escrow.claimable(developer.address)).to.equal(USDC(97.5));
     });
 
     for (const clientBps of [0n, 1n, 5_000n, 9_999n, 10_000n]) {

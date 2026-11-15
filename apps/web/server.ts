@@ -8,6 +8,7 @@ import "./src/lib/env";
 import "./src/lib/config/env";
 
 import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
 import { parse } from "node:url";
 import next from "next";
 import { Server as SocketIOServer } from "socket.io";
@@ -15,6 +16,7 @@ import { registerSocketHandlers } from "./src/socket/handlers";
 import { startEscrowBridge } from "./src/lib/realtime/escrow-bridge";
 import { logger } from "./src/lib/logger";
 import { assertChainConfig, defaultLocalManifestPath } from "@bloody-roar/shared/chain-guard";
+import { tokenFromCookieHeader, verifyJWT } from "./src/lib/auth";
 
 const dev = process.env.NODE_ENV !== "production";
 // Containers (Railway/Docker) set HOSTNAME to the container id, so never use it to bind.
@@ -31,9 +33,27 @@ const handle = app.getRequestHandler();
 // GraphQL is now handled by Next.js App Router API routes (/api/graphql/route.ts)
 
 app.prepare().then(async () => {
+  const notifications = new EventEmitter();
+  notifications.setMaxListeners(0);
   const httpServer = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
     const { pathname } = parsedUrl;
+
+    if (pathname === "/api/notifications/events" && req.method === "GET") {
+      const token = tokenFromCookieHeader(req.headers.cookie ?? null);
+      const user = token ? await verifyJWT(token) : null;
+      if (!user) { res.writeHead(401); res.end(); return; }
+      if (res.destroyed) return;
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+      res.write(": connected\n\n");
+      const send = () => res.write("event: notification\ndata: {}\n\n");
+      notifications.on(user.id, send);
+      notifications.on("*", send);
+      const heartbeat = setInterval(() => res.write(": keepalive\n\n"), 25_000);
+      const revalidate = setInterval(() => { void verifyJWT(token!).then((current) => { if (!current || current.id !== user.id) res.end(); }); }, 5 * 60_000);
+      res.on("close", () => { clearInterval(heartbeat); clearInterval(revalidate); notifications.off(user.id, send); notifications.off("*", send); });
+      return;
+    }
 
 // GraphQL requests will pass through to Next.js handler below
 
@@ -68,7 +88,7 @@ app.prepare().then(async () => {
 
   // Register all Socket.io event handlers
   registerSocketHandlers(io);
-  startEscrowBridge(io);
+  startEscrowBridge(io, (userId) => notifications.emit(userId));
 
   // Make io instance available globally (for use in GraphQL resolvers)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,5 +135,13 @@ app.prepare().then(async () => {
       },
       `🩸 Bloody-Roar server started`
     );
+    // Dev compiles routes on first request; pre-compile them in the background so the first click is fast.
+    if (dev && process.env.WARM_ROUTES !== "0") {
+      void (async () => {
+        for (const route of ["/", "/marketplace", "/dashboard", "/issues/create", "/guide", "/profile"]) {
+          await fetch(`http://localhost:${port}${route}`, { redirect: "manual" }).catch(() => undefined);
+        }
+      })();
+    }
   });
 });

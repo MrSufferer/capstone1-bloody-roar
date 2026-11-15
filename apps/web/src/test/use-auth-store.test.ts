@@ -124,6 +124,6 @@ describe("useAuthStore", () => {
     expect(result).toBe(false);
     const state = useAuthStore.getState();
     expect(state.status).toBe("error");
-    expect(state.error).toContain("từ chối ký");
+    expect(state.error).toContain("declined to sign");
   });
 });

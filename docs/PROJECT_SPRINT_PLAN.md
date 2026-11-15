@@ -3,8 +3,8 @@
 | Item | Value |
 |---|---|
 | Project | Bloody-Roar: Decentralized Bounty Marketplace |
-| Team | C1SE.25 (not confirmed, see section 7, item 6) |
-| Course | CMU-SE 450, Capstone Project 1, International School, Duy Tan University (the registration form ticks CMU-SE 451, see section 7, item 9) |
+| Team | C1SE.25 |
+| Course | CMU-SE 450, Capstone Project 1, International School, Duy Tan University (see section 7, item 9) |
 | Mentor | Le Kim Hoang (Faculty Mentor) |
 | Scrum Master | Nguyen Trong Khoi |
 | Planned window | 18 Aug to 30 Oct 2026 (5 sprints of 14 days, then release). Re-baselined to milestones M0 to M6, 28 Sep to 15 Nov 2026 |
@@ -228,10 +228,10 @@ Level is the seriousness (impact) of the risk. Likelihood is its probability. Th
 | 3 | Proposal section 5, Sprint 0 | "17 models" for the Prisma schema. The registration form says "17 models / 16 enums". | The schema has 31 models and 19 enums on 4 Nov. Update the figure or state the change. |
 | 4 | Proposal section 7, Economic row | "2.5% fee on successful escrows". | Match QĐ-02: 2.5% on the developer's share in every settlement path. |
 | 5 | AI Usage Disclosure | Lists ChatGPT, Cursor, Copilot, Claude and Groq/Gemini. The repository also refers to Codex, agy (Antigravity) and OpenCode (`AGENTS.md`, `docs/plan/parallel/reports/CODEX.md`, `AGY_PROMPT_*` files). | Confirm which tools the team used and add them. The statement says that non-disclosure may be academic misconduct. |
-| 6 | File names | Two course forms are named `C2SE12`. The disclosure statement names the team as C1SE.25. | Confirm the team code and rename the files. |
+| 6 | File names | Two course forms were named `C2SE12`. The team code is C1SE.25. | Done 8 Nov 2026: both forms renamed to `C1SE25`. |
 | 7 | Team roles | `TEAM_PLAN.md` gives the escrow contract to the smart-contract engineer. On `main`, 2 of 19 commits touching `apps/contracts` come from an identity that is probably that member (see `TEAM_EVIDENCE.md` section 3). | Confirm the identity mapping. Record pairing or review on contract changes. |
 | 8 | Two proposal versions | The submitted v1.1 and the revised v2.0 (`docs/PROPOSAL.md`) differ in scope: AI, GitHub auto-payout and the escrow flow. | Choose one baseline for submission. If v2.0 becomes the baseline, record the change with its decision ID. |
-| 9 | Course code | The registration form ticks CMU-SE 451. This plan and the proposal say CMU-SE 450. | Confirm the code with the mentor and correct the documents. |
+| 9 | Course code | The registration form ticked CMU-SE 451. This plan and the proposal say CMU-SE 450. | 8 Nov 2026: the form `.docx` now ticks CMU-SE 450. Re-export its PDF and confirm the code with the mentor. |
 | 10 | Survey figures | The submitted proposal, section 4, cites market and survey figures: a Statista market size, an Upwork survey and a GitHub Security Survey. `docs/documentation_bloody-roar.md` section 1.2 gives a 10–20% platform fee. The repository holds no source for any of them. | Find each source and state its year, or remove the figure. |
 | 14 | Competitor payment models | `PROPOSAL.md` section 4.5 does not describe how Algora, OnlyDust and Superteam Earn hold and pay money. The repository's documents only show their interface patterns (`docs/plan/UI_REDESIGN_SPEC.md` section 1.2). | Study each product's payment model from its own documentation and add a row per product. |
 | 11 | Git rule | `docs/TEAM_PLAN.md` section 9 uses a `develop` branch. Merged pull requests target `main`. | Pick one rule and update `docs/TEAM_PLAN.md` section 9. |
@@ -260,8 +260,8 @@ Level is the seriousness (impact) of the risk. Likelihood is its probability. Th
 
 - `docs/submit-document/C1SE25-Proposal_Bloody-Roar.docx` (v1.1)
 - `docs/submit-document/0-CAPSTONE PROJECT REGISTRATION FORM-C1SE25.pdf` (team roles, course, supervisor)
-- `docs/submit-document/0-CAPSTONE PROJECT REGISTRATION FORM-C2SE12.docx`
-- `docs/submit-document/2-AI USAGE DISCLOSURE STATEMENT (CMU)-C2SE12.docx`
+- `docs/submit-document/0-CAPSTONE PROJECT REGISTRATION FORM-C1SE25.docx`
+- `docs/submit-document/2-AI USAGE DISCLOSURE STATEMENT (CMU)-C1SE25.docx`
 - `docs/PROPOSAL.md` (v2.0)
 - `docs/TEAM_PLAN.md`
 - `docs/plan/BACKEND_EXECUTION_PLAN.md`

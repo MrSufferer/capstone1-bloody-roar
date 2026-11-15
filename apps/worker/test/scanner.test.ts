@@ -1,9 +1,14 @@
+import { describe } from "bun:test";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { beforeAll } from "bun:test";
 import { afterAll, expect, test } from "bun:test";
 import { prisma } from "@bloody-roar/database";
 import { scanOnce } from "../src/indexer/scanner";
+import { indexerJob } from "../src/jobs/indexer";
+import type { JobContext } from "../src/runtime/scheduler";
 import { cleanupChain, fakeRpc, newChain, rawLog, scanToHead, testConfig } from "./helpers";
+
+describe.skipIf(!process.env.TEST_DATABASE_URL)("database", () => {
 
 beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
 
@@ -93,4 +98,33 @@ test("a concurrent replay invalidates a scan before it can advance the cursor", 
   };
   await expect(scanOnce({ db: prisma, rpc, config })).rejects.toThrow("checkpoint changed");
   expect(await cursor()).toMatchObject({ lastScannedBlock: 99n, replayStatus: "REPLAY_REQUESTED" });
+});
+
+test("successive ticks reuse verified block hashes and refresh the window after a reorg", async () => {
+  await cleanupChain(prisma, config);
+  const chain = chainUpTo(170n);
+  const fake = fakeRpc(chain);
+  const tags: string[] = [];
+  const rpc = { ...fake, async call<T>(method: string, params: unknown[]): Promise<T> {
+    if (method === "eth_getBlockByNumber") tags.push(String(params[0]));
+    return fake.call<T>(method, params);
+  } };
+  const ctx = { db: prisma, rpc, config, now: () => new Date(), log: { info() {}, warn() {}, error() {} } } as JobContext;
+  await scanToHead({ db: prisma, rpc, config });
+  await indexerJob.run(ctx);
+  tags.length = 0;
+  chain.safe = 171n; chain.blockHash.set(171n, "0xh171");
+  await indexerJob.run(ctx);
+  expect(tags).toEqual(["0xaa", "safe", "0xab"]);
+  const hashes = (await cursor()).canonicalBlockHashes as Record<string, string>;
+  expect(Object.keys(hashes)).toHaveLength(65);
+  expect(hashes["106"]).toBeUndefined();
+  expect(hashes["107"]).toBe("0xh107");
+  tags.length = 0;
+  chain.blockHash.set(171n, "0xchanged171");
+  await indexerJob.run(ctx);
+  for (let n = 108n; n <= 171n; n++) expect(tags).toContain(`0x${n.toString(16)}`);
+  expect((await cursor()).canonicalBlockHashes).toMatchObject({ "171": "0xchanged171" });
+});
+
 });

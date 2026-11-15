@@ -3,17 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "db:generate": "POTHOS_OUTPUT=\"${PWD}/../../apps/web/src/graphql/generated/pothos-types.ts\" prisma generate",
-    "db:migrate": "POTHOS_OUTPUT=\"${PWD}/../../apps/web/src/graphql/generated/pothos-types.ts\" prisma migrate dev",
-    "db:migrate:prod": "POTHOS_OUTPUT=\"${PWD}/../../apps/web/src/graphql/generated/pothos-types.ts\" prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:prod": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:seed": "bun run src/seed.ts",
-    "db:seed:demo": "bun run src/seed-demo.ts",
-    "db:seed:local": "bun --env-file=../../.env run src/seed-local-token.ts",
+    "db:seed": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun run src/seed.ts",
+    "db:seed:demo": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun run src/seed-demo.ts",
+    "db:seed:local": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run src/seed-local-token.ts",
     "db:seed:prod": "bun run src/seed-prod.ts",
-    "db:push": "POTHOS_OUTPUT=\"${PWD}/../../apps/web/src/graphql/generated/pothos-types.ts\" prisma db push",
-    "db:reset": "POTHOS_OUTPUT=\"${PWD}/../../apps/web/src/graphql/generated/pothos-types.ts\" prisma migrate reset",
-    "test": "bun test ./test"
+    "db:push": "bun --env-file=../../.env run scripts/assert-local-db.ts && prisma db push",
+    "db:reset": "bun --env-file=../../.env run scripts/assert-local-db.ts && prisma migrate reset",
+    "test": "bun test ./test",
+    "db:backfill:conversations": "bun --env-file=../../.env run src/backfill-conversations.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.16.0"

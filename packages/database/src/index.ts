@@ -22,8 +22,10 @@ export const prisma =
     // Remote pooled Postgres: interactive transactions need more than the 5s default.
     transactionOptions: { maxWait: 10_000, timeout: 20_000 },
     log:
-      process.env.NODE_ENV === "development"
+      process.env.DEBUG_PRISMA === "1"
         ? ["query", "error", "warn"]
+        : process.env.NODE_ENV === "development"
+        ? ["error", "warn"]
         : ["error"],
   });
 
@@ -35,3 +37,4 @@ export * from "./notifications";
 export { PrismaClient };
 export * from "./escrow-channels";
 export * from "./reputation";
+export * from "./conversations";

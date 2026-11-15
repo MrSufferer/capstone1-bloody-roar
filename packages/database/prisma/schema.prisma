@@ -91,6 +91,7 @@ enum DisputeStatus {
 }
 
 enum NotificationType {
+  TEST_RUN_FINISHED
   NEW_APPLICANT // Client: someone applied to your task
   APPLICATION_ACCEPTED // Dev: your application was accepted
   APPLICATION_REJECTED // Dev: your application was rejected
@@ -159,6 +160,8 @@ enum AttachmentPurpose {
   DELIVERY
   EVIDENCE
   AVATAR
+  COMMENT_IMAGE
+  SOURCE
 }
 
 enum AttachmentStatus {
@@ -213,6 +216,11 @@ model User {
   skills   String[] // Array of skill tags
   location String?
 
+  // Plain profile links (unverified, shown to clients)
+  githubUrl    String?
+  linkedinUrl  String?
+  portfolioUrl String?
+
   // GitHub KYC (Sprint 3)
   githubUsername             String? @unique
   githubId                   String? @unique
@@ -250,6 +258,7 @@ model User {
   submissions      Submission[]
   attestations     Attestation[]
   issueComments    IssueComment[]
+  conversationMemberships ConversationParticipant[]
   issueViews       IssueView[]
 
   @@index([walletAddress])
@@ -315,6 +324,9 @@ model AuthChallenge {
 
 // Issue — a bounty task posted by a Client
 model Issue {
+  sourceSnapshot SourceSnapshot?
+  testRuns TestRun[]
+  conversations Conversation[]
   id          String        @id @default(cuid())
   title       String
   description String // Markdown content
@@ -383,6 +395,7 @@ model Issue {
 
 // Application — a Developer's application to an Issue
 model Application {
+  conversation Conversation?
   id      String            @id @default(cuid())
   status  ApplicationStatus @default(PENDING)
   message String? // Cover letter / pitch
@@ -404,6 +417,8 @@ model Application {
 
 // Message — chat message between Client and Developer in a task (per room)
 model Message {
+  conversationId String
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   id           String      @id @default(cuid())
   content      String // Text content (may be masked by AI Guard)
   type         MessageType @default(TEXT)
@@ -418,7 +433,6 @@ model Message {
   // Real-world chat concerns
   clientMessageId String? // Idempotency key (dedupe retries)
   replyToId       String? // Reply to a specific message
-  readAt          DateTime? // Read receipt (unread count)
   editedAt        DateTime? // Edited marker
   isDeleted       Boolean   @default(false) // Soft delete
   deletedAt       DateTime?
@@ -427,6 +441,7 @@ model Message {
   createdAt   DateTime     @default(now())
   attachments Attachment[]
 
+  @@index([conversationId, createdAt])
   @@index([issueId, createdAt]) // Load lịch sử chat theo room + đúng thứ tự
   @@index([senderId])
   @@index([clientMessageId])
@@ -435,6 +450,8 @@ model Message {
 
 // Attachment — file attached to an Issue (screenshots) or a Message (chat file)
 model Attachment {
+  conversationId String?
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   id         String   @id @default(cuid())
   issueId    String?
   issue      Issue?   @relation(fields: [issueId], references: [id], onDelete: Cascade)
@@ -514,6 +531,10 @@ model Dispute {
 
 // TestCase — AI-generated test cases / acceptance criteria for an Issue (Sprint 2)
 model TestCase {
+  testFilePath String?
+  testCode String?
+  expectBaseFail Boolean @default(true)
+  baseStatus String?
   id          String  @id @default(cuid())
   title       String
   description String
@@ -540,6 +561,7 @@ model TestCase {
 
 // Submission — a developer's work delivery / PR (Sprint 3 GitHub integration)
 model Submission {
+  testRuns TestRun[]
   id             String           @id @default(cuid())
   issueId        String
   issue          Issue            @relation(fields: [issueId], references: [id], onDelete: Cascade)
@@ -774,6 +796,8 @@ model ProjectionCheckpoint {
   lastScannedBlock       BigInt
   lastSafeBlock          BigInt
   lastCanonicalBlockHash String
+  canonicalBlockHashes   Json     @default("{}")
+  reorgAlerted           Boolean  @default(false)
   decoderVersion         Int
   replayStatus           String
   updatedAt              DateTime @updatedAt
@@ -798,7 +822,7 @@ model EscrowProjection {
   amountRaw                Decimal              @db.Decimal(78, 0)
   depositedAt              DateTime
   deliveryDeadline         DateTime
-  reviewDeadline           DateTime // deliveryDeadline + 7 days
+  reviewDeadline           DateTime // latest WorkSubmitted + 7 days (deliveryDeadline + 7 days before first submission)
   termsHash                String
   deliveryHash             String?
   externalDelivery         Boolean              @default(false)
@@ -861,6 +885,8 @@ model ClaimableBalance {
   address         String
   amountRaw       Decimal  @db.Decimal(78, 0)
   updatedAt       DateTime @updatedAt
+  autoClaimTxHash String?
+  autoClaimAt     DateTime?
 
   @@id([chainId, contractAddress, address])
   @@map("claimable_balances")
@@ -952,6 +978,18 @@ model IssueView {
 }
 
 // Skill — suggestion catalogue for the bounty form; Issue.requiredSkills stores the chosen names as plain text.
+// City to country lookup that backs the profile location picker.
+model Location {
+  id          String @id @default(cuid())
+  city        String
+  country     String
+  countryCode String
+
+  @@unique([city, countryCode])
+  @@index([country])
+  @@map("locations")
+}
+
 model Skill {
   id        String   @id @default(cuid())
   name      String   @unique
@@ -961,4 +999,104 @@ model Skill {
 
   @@index([category])
   @@map("skills")
+}
+
+
+enum SourceSnapshotStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+enum TestRunKind {
+  BASE_CHECK
+  SUBMISSION
+}
+enum TestRunStatus {
+  QUEUED
+  RUNNING
+  PASSED
+  FAILED
+  ERROR
+  TIMEOUT
+}
+enum TestFramework {
+  VITEST
+  PYTEST
+}
+model SourceSnapshot {
+  id String @id @default(cuid())
+  issueId String @unique
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  repoUrl String?
+  ref String?
+  commitSha String?
+  attachmentId String?
+  framework TestFramework?
+  installCommand String?
+  storagePath String?
+  sha256 String?
+  context String?
+  status SourceSnapshotStatus @default(PENDING)
+  attempts Int @default(0)
+  error String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("source_snapshots")
+}
+model TestRun {
+  id String @id @default(cuid())
+  issueId String
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  submissionId String?
+  submission Submission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  kind TestRunKind
+  status TestRunStatus @default(QUEUED)
+  bundleSha256 String
+  patchSha256 String?
+  results Json?
+  log String?
+  startedAt DateTime?
+  finishedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([issueId, createdAt])
+  @@index([status, createdAt])
+  @@map("test_runs")
+}
+enum ConversationKind {
+  ISSUE_WORK
+  APPLICATION
+}
+enum ParticipantRole {
+  CLIENT
+  DEVELOPER
+  APPLICANT
+  ADMIN
+}
+model Conversation {
+  id String @id @default(cuid())
+  kind ConversationKind
+  issueId String
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  applicationId String? @unique
+  application Application? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  lastMessageAt DateTime?
+  createdAt DateTime @default(now())
+  attachments Attachment[]
+  participants ConversationParticipant[]
+  messages Message[]
+  @@index([issueId, kind])
+  @@map("conversations")
+}
+model ConversationParticipant {
+  conversationId String
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role ParticipantRole
+  lastReadAt DateTime?
+  joinedAt DateTime @default(now())
+  @@id([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
 }

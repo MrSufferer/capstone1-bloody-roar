@@ -55,9 +55,9 @@ builder.queryField("submissions", (t) =>
         where: { id: args.issueId },
         select: { clientId: true, developerId: true },
       });
-      if (!issue) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
+      if (!issue) throw gqlError("Bounty not found", "NOT_FOUND");
       if (user.role !== "ADMIN" && issue.clientId !== user.id && issue.developerId !== user.id)
-        throw gqlError("Chỉ người tham gia hoặc admin được xem bài nộp", "FORBIDDEN");
+        throw gqlError("Only participants or admins can view submissions", "FORBIDDEN");
       return ctx.db.submission.findMany({
         ...query,
         where: { issueId: args.issueId },

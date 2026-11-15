@@ -10,6 +10,6 @@ export async function readEscrowToken(contractAddress: string, chainId: number):
     const result = await provider.call({ to: contractAddress, data: toFunctionSelector("token()") });
     return utils.getAddress(utils.defaultAbiCoder.decode(["address"], result)[0]);
   } catch {
-    throw gqlError("Không thể đọc token của escrow", "ESCROW_RPC_UNAVAILABLE");
+    throw gqlError("Could not read the escrow token", "ESCROW_RPC_UNAVAILABLE");
   }
 }

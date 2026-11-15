@@ -1,0 +1,30 @@
+import { beforeAll, expect, test } from "bun:test";
+import { assertTestDatabase } from "@bloody-roar/database/test-guard";
+import { privateKeyToAccount } from "@bloody-roar/shared";
+import { fixture } from "./harness/fixture";
+import { fund } from "./harness/funding";
+import { submitWork, releaseFunds } from "./harness/work";
+import { rpc } from "./harness/chain";
+import { tokenBalance } from "./harness/payout";
+import { waitFor } from "./harness/waitFor";
+import { runAutoClaim } from "../../apps/worker/src/jobs/auto-claim";
+import { createRpcClient } from "../../apps/worker/src/chain/client";
+import { loadConfig } from "../../apps/worker/src/config";
+
+beforeAll(() => assertTestDatabase(process.env.TEST_DATABASE_URL));
+test("E33: the platform relayer pays gas and the developer receives the resolved payout", async () => {
+  const f = await fixture(); await fund(f); await submitWork(f, "Relayed payout delivery"); await releaseFunds(f);
+  const key = `0x${"11".repeat(32)}` as const, account = privateKeyToAccount(key);
+  expect([f.client.walletAddress, f.developer.walletAddress, f.feeRecipient.toLowerCase()]).not.toContain(account.address.toLowerCase());
+  await rpc("hardhat_setBalance", [account.address, "0x16345785d8a0000"]);
+  const where = { chainId_contractAddress_address: { chainId: 31337, contractAddress: process.env.ESCROW_ADDRESS!.toLowerCase(), address: f.developer.walletAddress } };
+  const balance = await f.prisma.claimableBalance.findUniqueOrThrow({ where });
+  const before = await tokenBalance(f, f.developer.walletAddress);
+  const config = loadConfig({ ...process.env, RELAYER_PRIVATE_KEY: key });
+  const log = { info() {}, warn() {}, error() {} };
+  const started = Date.now();
+  await runAutoClaim({ db: f.prisma, config, rpc: createRpcClient({ url: config.rpcUrl }), now: () => new Date(), log });
+  await waitFor(async () => (await f.prisma.claimableBalance.findUniqueOrThrow({ where })).amountRaw.isZero(), 60_000);
+  expect(await tokenBalance(f, f.developer.walletAddress)).toBe(before + BigInt(balance.amountRaw.toFixed()));
+  expect(Date.now() - started).toBeLessThan(60_000);
+}, 240_000);

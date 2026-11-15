@@ -22,7 +22,7 @@ const PreparedCallArgRef = builder
 
 // Lệnh on-chain để ví ký. Hết hạn theo expiresAt (mặc định 30 phút).
 export const PreparedCallRef = builder.objectRef<PreparedCall>("PreparedCall").implement({
-  description: "Lệnh on-chain đã chuẩn bị để ví ký",
+  description: "On-chain call prepared for the wallet to sign",
   fields: (t) => ({
     intentId: t.exposeID("intentId"),
     chainId: t.exposeInt("chainId"),
@@ -39,12 +39,13 @@ export const PreparedCallRef = builder.objectRef<PreparedCall>("PreparedCall").i
 });
 
 export const ClaimableBalanceRef = builder.prismaObject("ClaimableBalance", {
-  description: "Số dư có thể rút của một địa chỉ trên một escrow contract",
+  description: "Claimable balance of an address on an escrow contract",
   fields: (t) => ({
     chainId: t.exposeInt("chainId"),
     contractAddress: t.exposeString("contractAddress"),
     address: t.exposeString("address"),
     amountRaw: t.string({ resolve: (balance) => balance.amountRaw.toFixed() }),
+    autoClaimPending: t.boolean({ resolve: (balance) => balance.autoClaimTxHash !== null && balance.amountRaw.gt(0) }),
   }),
 });
 
@@ -53,27 +54,27 @@ const sameWallet = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 // Mọi mutation prepare đọc projection theo issue. Không có ký quỹ thì không chuẩn bị gì.
 async function projectionFor(issueId: string, ctx: GraphQLContext) {
   const projection = await ctx.db.escrowProjection.findUnique({ where: { issueId } });
-  if (!projection || !projection.escrowKey) throw gqlError("Bài toán chưa có ký quỹ", "NOT_FOUND");
+  if (!projection || !projection.escrowKey) throw gqlError("This bounty has no escrow yet", "NOT_FOUND");
   const target = escrowTarget();
   if (projection.chainId !== target.chainId || projection.contractAddress.toLowerCase() !== target.contractAddress.toLowerCase())
-    throw gqlError("Ký quỹ không khớp cấu hình", "ESCROW_CHAIN_MISMATCH");
+    throw gqlError("Escrow does not match the configured contract", "ESCROW_CHAIN_MISMATCH");
   return { ...projection, escrowKey: projection.escrowKey };
 }
 
 builder.mutationField("prepareReleaseFunds", (t) =>
   t.field({
-    description: "Client chuẩn bị releaseFunds khi đã có bản giao hàng trên chain (BE-42)",
+    description: "Client prepares releaseFunds once the delivery is on-chain (BE-42)",
     type: PreparedCallRef,
     args: { issueId: t.arg.id({ required: true }) },
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       const projection = await projectionFor(String(args.issueId), ctx);
       if (!sameWallet(projection.client, user.walletAddress))
-        throw gqlError("Chỉ khách hàng mới release được tiền", "FORBIDDEN");
+        throw gqlError("Only the client can release the funds", "FORBIDDEN");
       if (projection.phase !== EscrowPhase.FUNDED)
-        throw gqlError("Ký quỹ không ở trạng thái FUNDED", "INVALID_PHASE");
+        throw gqlError("Escrow is not in the FUNDED state", "INVALID_PHASE");
       if (!projection.deliveryHash)
-        throw gqlError("Chưa có bản giao hàng trên chain", "NO_DELIVERY");
+        throw gqlError("No delivery on-chain yet", "NO_DELIVERY");
       return createPreparedCall(ctx.db, {
         userId: user.id,
         method: "releaseFunds",
@@ -87,18 +88,18 @@ builder.mutationField("prepareReleaseFunds", (t) =>
 // BE-45: không có bản giao và đã quá hạn giao. Hoàn tiền cho client.
 builder.mutationField("prepareClaimMissedDeliveryRefund", (t) =>
   t.field({
-    description: "Chuẩn bị hoàn tiền khi quá hạn giao mà chưa có bản giao (BE-45)",
+    description: "Prepare a refund when the deadline passed with no delivery (BE-45)",
     type: PreparedCallRef,
     args: { issueId: t.arg.id({ required: true }) },
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       const projection = await projectionFor(String(args.issueId), ctx);
       if (projection.phase !== EscrowPhase.FUNDED)
-        throw gqlError("Ký quỹ không ở trạng thái FUNDED", "INVALID_PHASE");
+        throw gqlError("Escrow is not in the FUNDED state", "INVALID_PHASE");
       if (projection.deliveryHash)
-        throw gqlError("Đã có bản giao hàng, không thể hoàn tiền", "DELIVERY_EXISTS");
+        throw gqlError("A delivery exists, so a refund is not possible", "DELIVERY_EXISTS");
       if (await readChainTime(projection.chainId) <= projection.deliveryDeadline)
-        throw gqlError("Chưa quá hạn giao hàng", "DEADLINE_NOT_REACHED");
+        throw gqlError("The delivery deadline has not passed yet", "DEADLINE_NOT_REACHED");
       return createPreparedCall(ctx.db, {
         userId: user.id,
         method: "claimMissedDeliveryRefund",
@@ -112,18 +113,18 @@ builder.mutationField("prepareClaimMissedDeliveryRefund", (t) =>
 // BE-46: đã có bản giao, client không duyệt trong cửa sổ review (7 ngày). Developer nhận tiền.
 builder.mutationField("prepareClaimReviewTimeout", (t) =>
   t.field({
-    description: "Chuẩn bị nhận tiền khi hết cửa sổ review (BE-46)",
+    description: "Prepare to claim when the review window ends (BE-46)",
     type: PreparedCallRef,
     args: { issueId: t.arg.id({ required: true }) },
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       const projection = await projectionFor(String(args.issueId), ctx);
       if (projection.phase !== EscrowPhase.FUNDED)
-        throw gqlError("Ký quỹ không ở trạng thái FUNDED", "INVALID_PHASE");
+        throw gqlError("Escrow is not in the FUNDED state", "INVALID_PHASE");
       if (!projection.deliveryHash)
-        throw gqlError("Chưa có bản giao hàng trên chain", "NO_DELIVERY");
+        throw gqlError("No delivery on-chain yet", "NO_DELIVERY");
       if (await readChainTime(projection.chainId) < projection.reviewDeadline)
-        throw gqlError("Chưa hết cửa sổ review", "REVIEW_WINDOW_NOT_REACHED");
+        throw gqlError("The review window has not ended yet", "REVIEW_WINDOW_NOT_REACHED");
       return createPreparedCall(ctx.db, {
         userId: user.id,
         method: "claimReviewTimeout",
@@ -137,16 +138,16 @@ builder.mutationField("prepareClaimReviewTimeout", (t) =>
 // BE-48: rút số dư claimable của chính mình. Contract trả claimable[recipient] cho recipient.
 builder.mutationField("prepareClaim", (t) =>
   t.field({
-    description: "Chuẩn bị rút số dư claimable của ví người dùng (BE-48)",
+    description: "Prepare a withdrawal of the user's claimable balance (BE-48)",
     type: PreparedCallRef,
     args: { recipient: t.arg.string({ required: true }) },
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       const recipient = String(args.recipient);
       if (!/^0x[0-9a-fA-F]{40}$/.test(recipient))
-        throw gqlError("Địa chỉ nhận không hợp lệ", "BAD_USER_INPUT");
+        throw gqlError("Invalid recipient address", "BAD_USER_INPUT");
       if (!sameWallet(recipient, user.walletAddress))
-        throw gqlError("Chỉ rút được số dư của ví mình", "FORBIDDEN");
+        throw gqlError("You can withdraw only your own wallet's balance", "FORBIDDEN");
       const target = escrowTarget();
       const balance = await ctx.db.claimableBalance.findFirst({
         where: {
@@ -156,7 +157,7 @@ builder.mutationField("prepareClaim", (t) =>
         },
       });
       if (!balance || balance.amountRaw.isZero())
-        throw gqlError("Không có số dư để rút", "NOTHING_TO_CLAIM");
+        throw gqlError("No balance to withdraw", "NOTHING_TO_CLAIM");
       return createPreparedCall(ctx.db, { userId: user.id, method: "claim", args: { recipient } });
     },
   }),
@@ -164,7 +165,7 @@ builder.mutationField("prepareClaim", (t) =>
 
 builder.queryField("myClaimable", (t) =>
   t.field({
-    description: "Số dư claimable của ví người dùng trên escrow contract đang cấu hình",
+    description: "The user's claimable balance on the configured escrow contract",
     type: [ClaimableBalanceRef],
     resolve: (_root, _args, ctx) => {
       const user = requireAuth(ctx);

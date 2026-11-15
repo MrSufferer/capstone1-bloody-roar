@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// Empty string clears the link; only http(s) URLs are kept.
+const link = z.string().trim().max(300).transform((value) => value === "" ? null : value)
+  .pipe(z.string().url().refine((value) => ["http:", "https:"].includes(new URL(value).protocol), "Link must start with http:// or https://").nullable())
+  .nullable().optional();
+
 export const ProfileInputSchema = z.object({
   name: z.string().trim().min(1).max(50).nullable().optional(),
   email: z.string().trim().max(254).transform((value) => value === "" ? null : value.toLowerCase()).pipe(z.string().email().nullable()).nullable().optional(),
@@ -7,6 +12,9 @@ export const ProfileInputSchema = z.object({
   avatar: z.string().url().max(500).refine((value) => ["http:", "https:"].includes(new URL(value).protocol), "Avatar URL must use HTTP or HTTPS").nullable().optional(),
   skills: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
   location: z.string().trim().max(80).nullable().optional(),
+  githubUrl: link,
+  linkedinUrl: link,
+  portfolioUrl: link,
   role: z.enum(["CLIENT", "DEVELOPER"]).optional(),
 });
 

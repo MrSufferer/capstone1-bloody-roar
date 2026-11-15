@@ -42,6 +42,12 @@ import "./modules/analytics/analytics.module";
 import "./modules/admin/admin.module";
 import "./modules/review/review.module";
 import "./modules/skill/skill.module";
+import "./modules/location/location.module";
+
+import "./modules/issue/issue-source.module";
+import "./modules/submission/test-runs.module";
+
+import "./modules/chat/conversation.module";
 
 // Build and export the schema
 export const schema = builder.toSchema();

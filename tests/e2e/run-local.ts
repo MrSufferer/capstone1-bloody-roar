@@ -6,6 +6,8 @@ import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { rpc } from "./harness/chain";
 import { waitFor } from "./harness/waitFor";
 
+const rpcPort = Number(process.env.E2E_RPC_PORT ?? "18545");
+process.env.RPC_URL = `http://127.0.0.1:${rpcPort}`;
 const databaseUrl = process.env.TEST_DATABASE_URL!;
 assertTestDatabase(databaseUrl);
 console.log("Test database:", new URL(databaseUrl).pathname.slice(1));
@@ -52,12 +54,12 @@ async function command(name: string, args: string[], env: Record<string, string 
 }
 let summary = "Harness did not finish";
 try {
-  for (const port of [8545, 4011, 4012, 4019]) await assertPortFree(port);
+  for (const port of [rpcPort, 4011, 4012, 4019]) await assertPortFree(port);
   const env = { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl, TEST_DATABASE_URL: databaseUrl,
-    RPC_URL: "http://127.0.0.1:8545", CHAIN_ID: "31337", FINALITY: "latest", AI_BASE_URL: "http://127.0.0.1:4019",
-    AI_EXTERNAL_GUARD: "false", NEXT_PUBLIC_APP_URL: "http://localhost:4012", WORKER_PORT: "4011", PORT: "4012", NODE_ENV: "development",
+    RPC_URL: `http://127.0.0.1:${rpcPort}`, LOCAL_RPC_URL: `http://127.0.0.1:${rpcPort}`, CHAIN_ID: "31337", FINALITY: "latest", AI_BASE_URL: "http://127.0.0.1:4019",
+    AI_EXTERNAL_GUARD: "false", WARM_ROUTES: "0", NEXT_DIST_DIR: ".next-e2e", NEXT_PUBLIC_APP_URL: "http://localhost:4012", WORKER_PORT: "4011", PORT: "4012", NODE_ENV: "development",
     GITHUB_WEBHOOK_SECRET: "harness-webhook-secret", NEXT_PUBLIC_CHAIN_ID: "31337" };
-  const hardhat = await start("hardhat", ["sh", "-c", "ulimit -n 65536; exec bun run --cwd apps/contracts node"], env);
+  const hardhat = await start("hardhat", ["sh", "-c", `ulimit -n 65536; exec bun run --cwd apps/contracts node --port ${rpcPort}`], env);
   await waitFor(async () => {
     if (hardhat.exitCode !== null) throw new Error("Hardhat exited before becoming ready");
     try { return await rpc<string>("eth_chainId") === "0x7a69"; } catch { return false; }
@@ -79,7 +81,7 @@ try {
   const web = await start("web", ["bun", "server.ts"], env, `${process.cwd()}/apps/web`);
   await waitHealthy("http://localhost:4012/api/health", web, 300_000);
   const files = [...new Bun.Glob("e[0-9][0-9]-*.test.ts").scanSync("tests/e2e")].sort();
-  if (files.length) {
+  if (files.length && process.env.E2E_UI_ONLY !== "1") {
     const result = Bun.spawn(["bun", "test", ...files.map((file) => `tests/e2e/${file}`)], { env: { ...env, NODE_ENV: "test" }, stdout: "inherit", stderr: "inherit" });
     if (await result.exited !== 0) throw new Error("E2E tests failed");
   }
@@ -89,7 +91,7 @@ try {
   if (!(await Bun.file("apps/web/ui-e2e/e32-ui-flow.test.ts").exists())) throw new Error("Missing E32 UI scenario");
   const ui = Bun.spawn(["bun", "test", "./ui-e2e"], { cwd: "apps/web", env: { ...env, NODE_ENV: "test" }, stdout: "inherit", stderr: "inherit" });
   if (await ui.exited !== 0) throw new Error("E32 UI tests failed");
-  summary = "E2E scenarios passed (E1–E32)";
+  summary = process.env.E2E_UI_ONLY === "1" ? "UI scenarios passed (E32, E34)" : "E2E scenarios passed (E1–E34)";
 } catch (error) {
   summary = error instanceof Error ? error.message : "Harness failed";
   process.exitCode = 1;

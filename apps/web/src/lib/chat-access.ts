@@ -23,3 +23,17 @@ export function canWriteIssueChat(issue: ChatIssueState, actor: ChatActor): bool
   if (actor.role === "ADMIN" || !WRITABLE_WORK_STATES.has(issue.status) || !issue.developerId) return false;
   return issue.clientId === actor.id || issue.developerId === actor.id;
 }
+
+type ConversationState = { kind: string; participants?: Array<{ userId: string; role: string }> };
+function workIssue(conv: ConversationState, issue: ChatIssueState): ChatIssueState {
+  return issue.status === "AWAITING_FUNDING" && !issue.developerId ? { ...issue, developerId: conv.participants?.find((p) => p.role === "DEVELOPER")?.userId ?? null } : issue;
+}
+type ApplicationState = { status: string; developerId: string };
+export function canReadConversation(conv: ConversationState, issue: ChatIssueState, application: ApplicationState | null, actor: ChatActor, isParticipant: boolean): boolean {
+  if (conv.kind === "ISSUE_WORK") return (isParticipant || actor.role === "ADMIN") && canReadIssueChat(workIssue(conv, issue), actor);
+  return conv.kind === "APPLICATION" && isParticipant && Boolean(application && (issue.clientId === actor.id || application.developerId === actor.id));
+}
+export function canWriteConversation(conv: ConversationState, issue: ChatIssueState, application: ApplicationState | null, actor: ChatActor, isParticipant: boolean): boolean {
+  if (actor.role === "ADMIN" || !canReadConversation(conv, issue, application, actor, isParticipant)) return false;
+  return conv.kind === "ISSUE_WORK" ? canWriteIssueChat(workIssue(conv, issue), actor) : issue.status === "OPEN" && application?.status === "PENDING";
+}

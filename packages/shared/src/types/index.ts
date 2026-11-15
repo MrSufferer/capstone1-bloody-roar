@@ -49,6 +49,7 @@ export interface ApiResponse<T = unknown> {
 // =============================================================================
 
 export type ServerToClientEvents = {
+  "inbox:update": (data: { conversationId: string; lastMessageAt: string; unreadDelta: number }) => void;
   // Chat
   "message:new": (data: ChatMessagePayload) => void;
   "message:modified": (data: ChatMessagePayload) => void; // AI Guard modified
@@ -61,6 +62,8 @@ export type ServerToClientEvents = {
 };
 
 export type ClientToServerEvents = {
+  "conversation:join": (conversationId: string, callback: (err?: string) => void) => void;
+  "conversation:leave": (conversationId: string, callback?: (err?: string) => void) => void;
   // Chat
   "message:send": (data: SendMessagePayload, callback: (err?: string) => void) => void;
 
@@ -70,6 +73,7 @@ export type ClientToServerEvents = {
 };
 
 export interface ChatMessagePayload {
+  conversationId?: string;
   id: string;
   content: string;
   type: "TEXT" | "FILE";
@@ -85,6 +89,7 @@ export interface ChatMessagePayload {
 }
 
 export interface SendMessagePayload {
+  conversationId?: string;
   content: string;
   type: "TEXT" | "FILE";
   issueId: string;

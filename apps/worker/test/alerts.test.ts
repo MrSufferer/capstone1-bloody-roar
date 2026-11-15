@@ -1,5 +1,20 @@
 import { expect, test } from "bun:test";
-import { evaluateAlerts, LAG_ALERT_SECONDS, RPC_ERROR_ALERT_STREAK, sendAlerts } from "../src/alerts";
+import { alertsJob, evaluateAlerts, LAG_ALERT_SECONDS, RPC_ERROR_ALERT_STREAK, sendAlerts } from "../src/alerts";
+
+test("alerts below the relayer gas threshold, not at the threshold", () => {
+  expect(evaluateAlerts({ lagSeconds: null, rpcErrorStreak: 0, relayerBalanceWei: 99n, relayerMinGasWei: 100n })).toEqual(["RELAYER_LOW_GAS"]);
+  expect(evaluateAlerts({ lagSeconds: null, rpcErrorStreak: 0, relayerBalanceWei: 100n, relayerMinGasWei: 100n })).toEqual([]);
+});
+
+test("deduplicates low gas alerts until the relayer recovers", async () => {
+  let balance = "0x63";
+  const warnings: Array<{ alert: string }> = [];
+  const ctx = { config: { relayerPrivateKey: `0x${"11".repeat(32)}`, relayerMinGasWei: 100n }, now: () => new Date(), rpc: { call: async () => balance }, log: { warn: (item: { alert: string }) => warnings.push(item), error() {} } };
+  await alertsJob.run(ctx as never); await alertsJob.run(ctx as never);
+  balance = "0x64"; await alertsJob.run(ctx as never);
+  balance = "0x63"; await alertsJob.run(ctx as never);
+  expect(warnings.filter((w) => w.alert === "RELAYER_LOW_GAS")).toHaveLength(2);
+});
 
 test("alerts when lag is over 5 minutes, not at exactly 5 minutes", () => {
   expect(evaluateAlerts({ lagSeconds: LAG_ALERT_SECONDS, rpcErrorStreak: 0 })).toEqual([]);

@@ -16,6 +16,7 @@ function callField(kind: "Query" | "Mutation", name: string, args: Record<string
 function fakeDb({ issue = openIssue, text = "hello" }: { issue?: Record<string, unknown>; text?: string } = {}) {
   const message = {
     id: "m-1",
+    conversationId: "conv-1",
     issueId: "issue-1",
     senderId: "client-1",
     content: text,
@@ -28,7 +29,9 @@ function fakeDb({ issue = openIssue, text = "hello" }: { issue?: Record<string, 
     attachments: [],
     issue,
   };
-  return {
+  const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    conversation: { findFirst: vi.fn().mockResolvedValue({ id: "conv-1" }), findUnique: vi.fn().mockResolvedValue({ id: "conv-1", issueId: "issue-1", kind: "ISSUE_WORK", issue, application: null, participants: [{ userId: "client-1" }, { userId: "dev-1" }] }) },
     message: {
       findUnique: vi.fn((_args: unknown) => Promise.resolve(message)),
       update: vi.fn((args: { where: { id: string }; data: Record<string, unknown> }) =>
@@ -38,6 +41,7 @@ function fakeDb({ issue = openIssue, text = "hello" }: { issue?: Record<string, 
     },
     issue: { findUnique: vi.fn((_args: unknown) => Promise.resolve(issue)) },
   };
+  return { ...db, $transaction: vi.fn(async (fn) => fn(db)) };
 }
 
 beforeEach(() => {
@@ -49,6 +53,13 @@ afterEach(() => {
 });
 
 describe("editMessage (BE-59c)", () => {
+  it("rechecks write access after the guard before saving an edit", async () => {
+    const db = fakeDb();
+    const room = { id: "conv-1", issueId: "issue-1", kind: "ISSUE_WORK", issue: openIssue, application: null, participants: [{ userId: "client-1" }, { userId: "dev-1" }] };
+    db.conversation.findUnique.mockResolvedValue({ ...room, issue: { ...openIssue, status: "COMPLETED" } }).mockResolvedValueOnce(room);
+    await expect(callField("Mutation", "editMessage", { id: "m-1", content: "too late" }, sender, db)).rejects.toThrow("You cannot access this conversation");
+    expect(db.message.update).not.toHaveBeenCalled();
+  });
   it("lets the sender edit a message and marks it edited", async () => {
     const db = fakeDb();
 
@@ -105,14 +116,14 @@ describe("unreadMessageCount (BE-59d)", () => {
 
     await expect(callField("Query", "unreadMessageCount", { issueId: "issue-1" }, sender, db)).resolves.toBe(3);
     expect(db.message.count.mock.calls[0]?.[0]).toMatchObject({
-      where: { issueId: "issue-1", isDeleted: false, readAt: null, senderId: { not: "client-1" } },
+      where: { conversationId: "conv-1", isDeleted: false, senderId: { not: "client-1" } },
     });
   });
 
   it("refuses the count to someone outside the task", async () => {
     const db = fakeDb();
 
-    await expect(callField("Query", "unreadMessageCount", { issueId: "issue-1" }, outsider, db)).rejects.toThrow("Forbidden");
+    await expect(callField("Query", "unreadMessageCount", { issueId: "issue-1" }, outsider, db)).rejects.toMatchObject({ extensions: { code: "FORBIDDEN" } });
     expect(db.message.count).not.toHaveBeenCalled();
   });
 });

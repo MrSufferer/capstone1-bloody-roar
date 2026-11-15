@@ -10,6 +10,12 @@ describe("normalizeProfileInput", () => {
     expect(normalizeProfileInput({ email: "   " }).email).toBeNull();
   });
 
+  it("keeps http(s) profile links, clears empty ones and rejects other schemes", () => {
+    expect(normalizeProfileInput({ linkedinUrl: " https://linkedin.com/in/me " }).linkedinUrl).toBe("https://linkedin.com/in/me");
+    expect(normalizeProfileInput({ portfolioUrl: "" }).portfolioUrl).toBeNull();
+    expect(() => normalizeProfileInput({ githubUrl: "javascript:alert(1)" })).toThrow();
+  });
+
   it("rejects an invalid email", () => {
     expect(() => normalizeProfileInput({ email: "not-an-email" })).toThrow();
   });

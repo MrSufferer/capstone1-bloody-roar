@@ -40,7 +40,7 @@ export function clientIp(req: Request): string {
 // Each user may call the AI-backed mutations 10 times an hour; admins 30.
 export function aiRateLimit(user: { id: string; role: string }): void {
   const limit = rateLimit(`ai:${user.id}`, { limit: user.role === "ADMIN" ? 30 : 10, windowMs: 3_600_000 });
-  if (!limit.ok) throw gqlError("Vượt giới hạn gọi AI", "RATE_LIMITED");
+  if (!limit.ok) throw gqlError("AI call limit exceeded", "RATE_LIMITED");
 }
 
 export function tooManyRequests(retryAfterMs: number) {

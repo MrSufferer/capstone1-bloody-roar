@@ -6,6 +6,6 @@ export const metadata: Metadata = {
   description: "Discover engineering bounties, apply with zero stake, and work with clear milestones.",
 };
 
-export default function HomePage({ searchParams }: { searchParams: { search?: string } }) {
-  return <HomePageView search={searchParams.search ?? ""} />;
+export default function HomePage() {
+  return <HomePageView />;
 }

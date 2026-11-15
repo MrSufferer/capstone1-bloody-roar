@@ -1,3 +1,4 @@
+import { evaluateAlerts, sendAlerts } from "../alerts";
 import { checkpointKey, loadCheckpoint, lockCheckpoint, type IndexerConfig } from "./checkpoint";
 import { getBlockByNumber } from "../chain/client";
 import type { ScanDeps } from "./scanner";
@@ -6,9 +7,7 @@ import { undoDeposit, undoWork, undoResolved, undoSettlement, undoClaimed, undoD
 
 // Compares the hash stored at lastScannedBlock with the node's hash. On a mismatch, rewinds the
 // cursor by reorgWindow blocks and marks events whose block hash changed as non-canonical.
-// shortcut: a reorg deeper than INDEXER_REORG_WINDOW is not unwound. Upgrade: store one hash per
-// block so the fork point can be found without a fixed window.
-export async function handleReorg({ db, rpc, config }: ScanDeps): Promise<{ rewoundTo: bigint } | null> {
+export async function handleReorg({ db, rpc, config }: ScanDeps & { config: ScanDeps["config"] & { alertWebhookUrl?: string | undefined } }): Promise<{ rewoundTo: bigint } | { verifiedTip: { number: bigint; hash: string } } | null> {
   const checkpoint = await loadCheckpoint(db, config);
   // A previous rewind or replay can leave canonical events ahead of the cursor.
   // Check them too: a second reorg can occur before the scanner catches up.
@@ -34,7 +33,8 @@ export async function handleReorg({ db, rpc, config }: ScanDeps): Promise<{ rewo
     if (!current) throw new Error(`RPC returned no block for ${checkpoint.lastScannedBlock}`);
     checkpointMismatch = current.hash.toLowerCase() !== checkpoint.lastCanonicalBlockHash.toLowerCase();
   }
-  if (!checkpointMismatch && !aheadMismatch) return null;
+  if (!checkpointMismatch && !aheadMismatch) return checkpoint.lastCanonicalBlockHash
+    ? { verifiedTip: { number: checkpoint.lastScannedBlock, hash: checkpoint.lastCanonicalBlockHash } } : null;
 
   const floor = config.escrowDeployBlock - 1n;
   const target = maxBigInt(floor, checkpoint.lastScannedBlock - BigInt(config.reorgWindow));
@@ -60,6 +60,17 @@ export async function handleReorg({ db, rpc, config }: ScanDeps): Promise<{ rewo
     const targetBlock = await getBlockByNumber(rpc, target);
     if (!targetBlock) throw new Error(`RPC returned no block for ${target}`);
     targetHash = targetBlock.hash;
+  }
+  if (target > floor) {
+    const boundary = (checkpoint.canonicalBlockHashes as Record<string, string>)[target.toString()];
+    if (!boundary || boundary.toLowerCase() !== targetHash.toLowerCase()) {
+      const claimed = await db.projectionCheckpoint.updateMany({ where: { ...checkpointKey(config).chainId_contractAddress, reorgAlerted: false }, data: { reorgAlerted: true } });
+      if (claimed.count) {
+        const alerts = evaluateAlerts({ lagSeconds: null, rpcErrorStreak: 0, reorgBeyondWindow: true });
+        await sendAlerts(alerts, config.alertWebhookUrl).catch((error: unknown) => console.error("reorg alert webhook failed", error));
+      }
+      throw new Error("REORG_BEYOND_WINDOW: boundary hash changed or unavailable; manual recovery required");
+    }
   }
   await db.$transaction(async (tx) => {
     await lockCheckpoint(tx, config, checkpoint);
@@ -105,7 +116,7 @@ export async function handleReorg({ db, rpc, config }: ScanDeps): Promise<{ rewo
     }
     await tx.projectionCheckpoint.update({
       where: checkpointKey(config),
-      data: { lastScannedBlock: target, lastCanonicalBlockHash: targetHash },
+      data: { lastScannedBlock: target, lastCanonicalBlockHash: targetHash, reorgAlerted: false },
     });
   }, { timeout: 30_000 });
   return { rewoundTo: target };

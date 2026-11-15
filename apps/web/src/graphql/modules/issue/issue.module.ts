@@ -45,7 +45,7 @@ function issueBountyRaw(issue: { bountyAmount: { toFixed(): string }; token: { d
 function assertBountyRange(raw: bigint, token: { decimals: number }) {
   const min = parseTokenAmountInput(String(BOUNTY_MIN_AMOUNT), token);
   const max = parseTokenAmountInput(String(BOUNTY_MAX_AMOUNT), token);
-  if (raw < min || raw > max) throw gqlError("Ngân sách ngoài khoảng cho phép", "BAD_USER_INPUT");
+  if (raw < min || raw > max) throw gqlError("Budget is outside the allowed range", "BAD_USER_INPUT");
 }
 
 // ---------------------------------------------------------------------------
@@ -114,11 +114,11 @@ export const IssueRef = builder.prismaObject("Issue", {
     status: t.expose("status", { type: IssueStatusEnum }),
     bountyAmount: t.field({
       type: TokenAmountRef,
-      description: "Ngân sách theo đơn vị token: raw, decimals, symbol, formatted",
+      description: "Budget in token units: raw, decimals, symbol, formatted",
       resolve: (issue) => tokenAmount(issueBountyRaw(issue), issue.token),
     }),
     bountyAmountRaw: t.string({
-      description: "Ngân sách theo đơn vị nhỏ nhất của token (chuỗi số nguyên)",
+      description: "Budget in the token's smallest unit (integer string)",
       resolve: (issue) => issueBountyRaw(issue).toString(),
     }),
     requiredSkills: t.exposeStringList("requiredSkills"),
@@ -170,6 +170,11 @@ export const IssueRef = builder.prismaObject("Issue", {
       select: { _count: { select: { applications: { where: { status: { not: "WITHDRAWN" } } } } } },
       resolve: (issue) => issue._count.applications,
     }),
+    commentCount: t.int({
+      description: "Number of comments on the bounty",
+      select: { _count: { select: { comments: true } } },
+      resolve: (issue) => issue._count.comments,
+    }),
     attachments: t.field({
       type: [AttachmentRef],
       description: "Public image attachments used as bounty previews",
@@ -188,14 +193,14 @@ export function encodeCursor(id: string): string {
 
 export function decodeCursor(cursor: string): string {
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(cursor)) {
-    throw gqlError("Cursor không hợp lệ", "INVALID_CURSOR");
+    throw gqlError("Invalid cursor", "INVALID_CURSOR");
   }
   const id = Buffer.from(cursor, "base64").toString("utf8");
   if (
     !id ||
     Buffer.from(id, "utf8").toString("base64").replace(/=+$/, "") !== cursor.replace(/=+$/, "")
   ) {
-    throw gqlError("Cursor không hợp lệ", "INVALID_CURSOR");
+    throw gqlError("Invalid cursor", "INVALID_CURSOR");
   }
   return id;
 }
@@ -234,7 +239,7 @@ const PageInfoRef = builder.objectRef<PageInfoShape>("PageInfo").implement({
 });
 
 const IssueConnectionRef = builder.objectRef<IssueConnectionShape>("IssueConnection").implement({
-  description: "Connection issues với cursor pagination",
+  description: "Issues connection with cursor pagination",
   fields: (t) => ({
     edges: t.field({
       type: [IssueEdgeRef],
@@ -324,7 +329,7 @@ const CreateIssueSchema = z.object({
   title: z.string().min(10).max(120),
   description: z.string().min(30).max(5000),
   category: z.enum(ISSUE_CATEGORIES),
-  bountyAmount: z.string().regex(BOUNTY_TEXT, "Ngân sách chỉ gồm số, tối đa 6 chữ số thập phân"),
+  bountyAmount: z.string().regex(BOUNTY_TEXT, "Budget must be a number with at most 6 decimal places"),
   tokenId: z.string().min(1),
   deliveryDeadline: z
     .string()
@@ -336,7 +341,7 @@ const CreateIssueSchema = z.object({
           deadline > Date.now() && deadline <= Date.now() + ESCROW_CONSTANTS.MAX_DELIVERY_DAYS * DAY_MS
         );
       },
-      { message: "deliveryDeadline phải ở tương lai và không quá 180 ngày" },
+      { message: "deliveryDeadline must be in the future and within 180 days" },
     )
     .nullish(),
   requiredSkills: z.array(z.string().min(1).max(40)).max(10).nullish(),
@@ -346,7 +351,7 @@ const CreateIssueSchema = z.object({
     .string()
     .datetime()
     .refine((s) => new Date(s).getTime() > Date.now(), {
-      message: "expiresAt phải ở tương lai",
+      message: "expiresAt must be in the future",
     })
     .nullish(),
   githubRepo: z
@@ -367,7 +372,7 @@ const CreateIssueSchema = z.object({
 builder.queryField("issues", (t) =>
   t.field({
     description:
-      "Danh sách bounty: filter (category/status/bounty/skill/search) + sort + cursor pagination",
+      "Bounty list: filter (category/status/bounty/skill/search) + sort + cursor pagination",
     type: IssueConnectionRef,
     args: {
       first: t.arg.int({ required: false }),
@@ -391,6 +396,22 @@ builder.queryField("issues", (t) =>
         )
       ` : null;
 
+      // Smart keyword search: every word must appear in the title, description, repo or a skill, in any order.
+      const words = (q.search ?? "").toLowerCase().split(/\s+/).filter(Boolean).slice(0, 5);
+      const wordClauses: Prisma.IssueWhereInput[] = await Promise.all(words.map(async (word) => {
+        const hits = await ctx.db.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM issues WHERE EXISTS (
+            SELECT 1 FROM unnest("requiredSkills") AS skill WHERE strpos(lower(skill), ${word}) > 0
+          )
+        `;
+        return { OR: [
+          { title: { contains: word, mode: "insensitive" } },
+          { description: { contains: word, mode: "insensitive" } },
+          { githubRepo: { contains: word, mode: "insensitive" } },
+          { id: { in: hits.map((row) => row.id) } },
+        ] };
+      }));
+
       // Build where clause (homepage chỉ hiển thị task đã publish)
       const where: Prisma.IssueWhereInput = {
         isDraft: false,
@@ -406,14 +427,7 @@ builder.queryField("issues", (t) =>
             }
           : {}),
         ...(skillIds ? { id: { in: skillIds.map((row) => row.id) } } : {}),
-        ...(q.search
-          ? {
-              OR: [
-                { title: { contains: q.search, mode: "insensitive" } },
-                { description: { contains: q.search, mode: "insensitive" } },
-              ],
-            }
-          : {}),
+        ...(wordClauses.length ? { AND: wordClauses } : {}),
       };
 
       // Sort (luôn kèm id tiebreaker để cursor phân trang ổn định)
@@ -441,19 +455,22 @@ builder.queryField("issues", (t) =>
           select: { id: true },
         });
         if (!cursorIssue)
-          throw gqlError("Cursor không thuộc danh sách bounty hiện tại", "INVALID_CURSOR");
+          throw gqlError("Cursor does not belong to the current bounty list", "INVALID_CURSOR");
       }
-      const rows = await ctx.db.issue.findMany({
-        where,
-        orderBy,
-        take: take + 1,
-        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-        include: ISSUE_INCLUDE,
-      });
+      // totalCount does not depend on the page rows, so run both queries together.
+      const [rows, totalCount] = await Promise.all([
+        ctx.db.issue.findMany({
+          where,
+          orderBy,
+          take: take + 1,
+          ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+          include: ISSUE_INCLUDE,
+        }),
+        ctx.db.issue.count({ where }),
+      ]);
 
       const hasNextPage = rows.length > take;
       const issues = hasNextPage ? rows.slice(0, take) : rows;
-      const totalCount = await ctx.db.issue.count({ where });
 
       const firstIssue = issues[0];
       const lastIssue = issues[issues.length - 1];
@@ -500,7 +517,7 @@ builder.queryField("myIssues", (t) =>
       const where: Prisma.IssueWhereInput = { OR: [{ clientId: user.id }, { developerId: user.id }] };
       const cursor = page.after ? decodeCursor(page.after) : null;
       if (cursor && !await ctx.db.issue.findFirst({ where: { ...where, id: cursor }, select: { id: true } }))
-        throw gqlError("Cursor không thuộc danh sách bài toán", "INVALID_CURSOR");
+        throw gqlError("Cursor does not belong to this bounty list", "INVALID_CURSOR");
       return ctx.db.issue.findMany({ ...query, where, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: page.first ?? DEFAULT_PAGE_SIZE,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: ISSUE_INCLUDE });
     },
@@ -513,7 +530,7 @@ builder.queryField("myIssues", (t) =>
 
 builder.queryField("issue", (t) =>
   t.field({
-    description: "Chi tiết 1 bounty theo id",
+    description: "One bounty by id",
     type: IssueRef,
     nullable: true,
     args: {
@@ -545,7 +562,7 @@ builder.mutationField("recordIssueView", (t) => t.boolean({
     const user = requireAuth(ctx), issueId = String(args.issueId), now = new Date();
     return ctx.db.$transaction(async (tx) => {
       const issue = await tx.issue.findUnique({ where: { id: issueId }, select: { id: true, clientId: true, isDraft: true } });
-      if (!issue || (issue.isDraft && issue.clientId !== user.id)) throw gqlError("Không tìm thấy bài toán", "NOT_FOUND");
+      if (!issue || (issue.isDraft && issue.clientId !== user.id)) throw gqlError("Bounty not found", "NOT_FOUND");
       const inserted = await tx.issueView.createMany({ data: [{ issueId, userId: user.id, viewedAt: now }], skipDuplicates: true });
       const updated = inserted.count ? null : await tx.issueView.updateMany({ where: { issueId, userId: user.id, viewedAt: { lte: new Date(now.getTime() - 3_600_000) } }, data: { viewedAt: now } });
       if (!inserted.count && !updated?.count) return false;
@@ -561,7 +578,7 @@ builder.mutationField("recordIssueView", (t) => t.boolean({
 
 builder.mutationField("createIssue", (t) =>
   t.fieldWithInput({
-    description: "Đăng bounty mới (yêu cầu đăng nhập bằng ví)",
+    description: "Post a new bounty (wallet sign-in required)",
     type: IssueRef,
     typeOptions: { name: "CreateIssueInput" },
     input: {
@@ -580,7 +597,7 @@ builder.mutationField("createIssue", (t) =>
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
       if (user.role === UserRole.ADMIN)
-        throw gqlError("Quản trị viên không thể đăng bài toán", "ADMIN_NOT_ALLOWED");
+        throw gqlError("Admins cannot post bounties", "ADMIN_NOT_ALLOWED");
 
       const input = parseOrThrow(CreateIssueSchema, args.input);
 
@@ -590,7 +607,7 @@ builder.mutationField("createIssue", (t) =>
       });
       if (!token || !token.isActive || token.chainId !== ACTIVE_CHAIN_ID) {
         throw gqlError(
-          "Bounty token không tồn tại hoặc không được hỗ trợ trên chain hiện tại",
+          "Bounty token does not exist or is not supported on the current chain",
           "INVALID_TOKEN",
         );
       }
@@ -628,7 +645,7 @@ const UpdateIssueSchema = CreateIssueSchema.partial()
     category: z.enum(ISSUE_CATEGORIES).optional(),
     tokenId: z.string().min(1).optional(),
   })
-  .refine((value) => Object.keys(value).length > 0, "Cần thay đổi ít nhất một trường");
+  .refine((value) => Object.keys(value).length > 0, "Change at least one field");
 
 builder.mutationField("updateIssue", (t) =>
   t.fieldWithInput({
@@ -657,9 +674,9 @@ builder.mutationField("updateIssue", (t) =>
       });
       if (!current) return null;
       if (current.clientId !== user.id)
-        throw gqlError("Chỉ chủ bài toán mới được chỉnh sửa", "FORBIDDEN");
+        throw gqlError("Only the bounty owner can edit it", "FORBIDDEN");
       if (current.status !== IssueStatus.OPEN)
-        throw gqlError("Không thể chỉnh sửa bài toán đã được nhận", "ISSUE_NOT_EDITABLE");
+        throw gqlError("A bounty that has been taken cannot be edited", "ISSUE_NOT_EDITABLE");
 
       const raw = Object.fromEntries(
         Object.entries(args.input).filter(([key, value]) => key !== "id" && value !== null),
@@ -676,7 +693,7 @@ builder.mutationField("updateIssue", (t) =>
           })
         : current.token;
       if (!token)
-        throw gqlError("Bounty token không tồn tại hoặc không được hỗ trợ", "INVALID_TOKEN");
+        throw gqlError("Bounty token does not exist or is not supported", "INVALID_TOKEN");
 
       const bountyRaw = parseTokenAmountInput(
         input.bountyAmount ?? current.bountyAmount.toFixed(),
@@ -713,7 +730,7 @@ builder.mutationField("updateIssue", (t) =>
         data: updateData,
       });
       if (updated.count !== 1)
-        throw gqlError("Bài toán vừa được nhận và không thể chỉnh sửa", "ISSUE_NOT_EDITABLE");
+        throw gqlError("This bounty was just taken and can no longer be edited", "ISSUE_NOT_EDITABLE");
       return ctx.db.issue.findUniqueOrThrow({
         where: { id: current.id },
         include: ISSUE_INCLUDE,
@@ -732,9 +749,9 @@ builder.mutationField("cancelIssue", (t) =>
       const result = await ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findUnique({ where: { id: String(args.id) } });
         if (!issue) return null;
-        if (issue.clientId !== user.id) throw gqlError("Chỉ chủ bài toán mới được hủy", "FORBIDDEN");
+        if (issue.clientId !== user.id) throw gqlError("Only the bounty owner can cancel it", "FORBIDDEN");
         if (issue.status !== IssueStatus.OPEN) {
-          throw gqlError("Chỉ hủy được bài toán đang mở. Bài đã nạp ký quỹ phải kết thúc qua escrow.", "ISSUE_NOT_CANCELLABLE");
+          throw gqlError("Only open bounties can be cancelled. A funded bounty must end through the escrow.", "ISSUE_NOT_CANCELLABLE");
         }
 
         await tx.issue.update({
@@ -764,8 +781,8 @@ builder.mutationField("cancelIssue", (t) =>
           createNotificationSafely(ctx.db, {
             userId: devId,
             type: "APPLICATION_REJECTED",
-            title: "Bounty đã bị hủy",
-            body: `Khách hàng đã hủy “${result.issue.title}”.`,
+            title: "Bounty cancelled",
+            body: `The client cancelled “${result.issue.title}”.`,
             actorId: user.id,
             link: `/issues/${result.issue.id}`,
             data: { issueId: result.issue.id },
@@ -786,18 +803,18 @@ builder.mutationField("attachIssueFile", (t) => t.field({
     return ctx.db.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM issues WHERE id = ${issueId} FOR UPDATE`;
       const issue = await tx.issue.findUnique({ where: { id: issueId }, select: { clientId: true, status: true } });
-      if (!issue) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
-      if (issue.clientId !== user.id) throw gqlError("Chỉ chủ bài toán được đính kèm ảnh", "FORBIDDEN");
-      if (issue.status !== IssueStatus.OPEN) throw gqlError("Bài toán không còn chỉnh sửa được", "ISSUE_NOT_EDITABLE");
+      if (!issue) throw gqlError("Bounty not found", "NOT_FOUND");
+      if (issue.clientId !== user.id) throw gqlError("Only the bounty owner can attach images", "FORBIDDEN");
+      if (issue.status !== IssueStatus.OPEN) throw gqlError("This bounty can no longer be edited", "ISSUE_NOT_EDITABLE");
       const attachment = await tx.attachment.findUnique({ where: { id: attachmentId } });
       if (!attachment || attachment.uploaderId !== user.id || attachment.purpose !== "ISSUE_IMAGE" || attachment.status !== "ATTACHED" ||
           !attachment.fileMime.toLowerCase().startsWith("image/") || attachment.messageId || (attachment.issueId && attachment.issueId !== issueId))
-        throw gqlError("Tệp đính kèm không hợp lệ", "INVALID_ATTACHMENT");
+        throw gqlError("Invalid attachment", "INVALID_ATTACHMENT");
       if (attachment.issueId === issueId) return attachment;
       if ((await tx.attachment.count({ where: { issueId, purpose: "ISSUE_IMAGE", status: "ATTACHED" } })) >= 4)
-        throw gqlError("Tối đa 4 ảnh cho mỗi bài toán", "TOO_MANY_ATTACHMENTS");
+        throw gqlError("At most 4 images per bounty", "TOO_MANY_ATTACHMENTS");
       const moved = await tx.attachment.updateMany({ where: { id: attachmentId, uploaderId: user.id, purpose: "ISSUE_IMAGE", status: "ATTACHED", issueId: null, messageId: null }, data: { issueId } });
-      if (!moved.count) throw gqlError("Tệp vừa được gắn vào nơi khác", "INVALID_ATTACHMENT");
+      if (!moved.count) throw gqlError("This file was just attached elsewhere", "INVALID_ATTACHMENT");
       return tx.attachment.findUniqueOrThrow({ where: { id: attachmentId } });
     });
   },

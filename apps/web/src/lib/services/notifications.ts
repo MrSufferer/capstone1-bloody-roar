@@ -1,5 +1,4 @@
-import type { Notification, NotificationType, PrismaClient } from "@bloody-roar/database";
-import { getSocketIO } from "../../socket/handlers";
+import type { NotificationType, PrismaClient } from "@bloody-roar/database";
 import { createLogger } from "../logger";
 
 const log = createLogger("notifications");
@@ -30,26 +29,7 @@ export async function createNotification(
     },
   });
 
-  emitNotification(notification);
-
   return notification;
-}
-
-
-export function emitNotification(notification: Notification) {
-  try {
-    getSocketIO().to(`user:${notification.userId}`).emit("notification:new", {
-      id: notification.id,
-      type: notification.type,
-      title: notification.title,
-      body: notification.body,
-      ...(notification.link ? { data: { link: notification.link } } : {}),
-      createdAt: notification.createdAt.toISOString(),
-    });
-  } catch {
-    // Persisting the notification is the source of truth; socket delivery is best effort.
-  }
-
 }
 
 /** Keeps an already-committed workflow mutation successful when notification storage is down. */

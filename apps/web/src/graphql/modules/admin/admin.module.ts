@@ -203,7 +203,7 @@ builder.queryField("reconciliationFindings", (t) =>
       requireAdmin(ctx);
       const status = args.status ?? "OPEN";
       const resolvedAt = status === "OPEN" ? null : status === "RESOLVED" ? { not: null } : undefined;
-      if (resolvedAt === undefined) throw gqlError("Trạng thái không hợp lệ", "BAD_USER_INPUT");
+      if (resolvedAt === undefined) throw gqlError("Invalid status", "BAD_USER_INPUT");
       return ctx.db.reconciliationFinding.findMany({
         where: { resolvedAt },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -259,7 +259,7 @@ builder.mutationField("adminHideIssue", (t) =>
       const { reason } = parseOrThrow(z.object({ reason: z.string().trim().min(3).max(500) }), { reason: args.reason });
       await ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findUnique({ where: { id: issueId }, select: { id: true } });
-        if (!issue) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
+        if (!issue) throw gqlError("Bounty not found", "NOT_FOUND");
         await tx.issue.update({ where: { id: issueId }, data: { hiddenAt: new Date() } });
         await tx.adminLog.create({
           data: { adminId: admin.id, action: "hide_issue", target: "issue", targetId: issueId, details: { reason } },
@@ -278,7 +278,7 @@ builder.mutationField("adminUnhideIssue", (t) =>
       const issueId = String(args.issueId);
       await ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findUnique({ where: { id: issueId }, select: { id: true } });
-        if (!issue) throw gqlError("Bài toán không tồn tại", "NOT_FOUND");
+        if (!issue) throw gqlError("Bounty not found", "NOT_FOUND");
         await tx.issue.update({ where: { id: issueId }, data: { hiddenAt: null } });
         await tx.adminLog.create({
           data: { adminId: admin.id, action: "unhide_issue", target: "issue", targetId: issueId, details: {} },
@@ -306,9 +306,9 @@ builder.mutationField("banUser", (t) =>
         const target = await tx.user.findUnique({
           where: { id: String(args.input.userId) },
         });
-        if (!target) throw gqlError("Người dùng không tồn tại", "NOT_FOUND");
+        if (!target) throw gqlError("User not found", "NOT_FOUND");
         if (target.id === admin.id || target.role === UserRole.ADMIN)
-          throw gqlError("Không thể khóa tài khoản quản trị viên", "FORBIDDEN");
+          throw gqlError("Admin accounts cannot be suspended", "FORBIDDEN");
         const user = await tx.user.update({
           where: { id: target.id },
           data: {
@@ -369,7 +369,7 @@ builder.mutationField("unbanUser", (t) =>
         const target = await tx.user.findUnique({
           where: { id: String(args.userId) },
         });
-        if (!target) throw gqlError("Người dùng không tồn tại", "NOT_FOUND");
+        if (!target) throw gqlError("User not found", "NOT_FOUND");
         const user = await tx.user.update({
           where: { id: target.id },
           data: { isBanned: false, bannedReason: null, bannedAt: null },
@@ -400,11 +400,11 @@ builder.mutationField("setUserRole", (t) =>
       const role = parseOrThrow(z.nativeEnum(UserRole), args.role);
       const userId = String(args.userId);
       if (userId === admin.id && role !== UserRole.ADMIN) {
-        throw gqlError("Không thể tự hạ quyền quản trị viên", "SELF_DEMOTION");
+        throw gqlError("You cannot remove your own admin role", "SELF_DEMOTION");
       }
       return ctx.db.$transaction(async (tx) => {
         const target = await tx.user.findUnique({ where: { id: userId } });
-        if (!target) throw gqlError("Người dùng không tồn tại", "NOT_FOUND");
+        if (!target) throw gqlError("User not found", "NOT_FOUND");
         const user = await tx.user.update({ where: { id: target.id }, data: { role } });
         await tx.adminLog.create({
           data: {
