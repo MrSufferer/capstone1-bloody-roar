@@ -2,6 +2,7 @@ import { ThirdwebAuth } from "@thirdweb-dev/auth";
 import { PrivateKeyWallet } from "@thirdweb-dev/wallets";
 import { prisma } from "@bloody-roar/database";
 import { createLogger } from "./logger";
+import { authDomain } from "./auth/siwe";
 import * as crypto from "crypto";
 
 const log = createLogger("auth");
@@ -61,7 +62,7 @@ function getThirdwebAuth(): ThirdwebAuth {
   }
   return new ThirdwebAuth(
     new PrivateKeyWallet(AUTH_PRIVATE_KEY),
-    process.env.NEXT_PUBLIC_APP_URL?.replace(/^https?:\/\//, "") ?? "localhost:4000",
+    authDomain(),
   );
 }
 

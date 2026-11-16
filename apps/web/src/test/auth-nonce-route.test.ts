@@ -9,7 +9,7 @@ vi.mock("../lib/auth", () => ({
     payload: async ({ address }: { address: string }) => ({ address, nonce: crypto.randomUUID() }),
   }),
 }));
-vi.mock("../lib/auth/siwe", () => ({ authDomain: () => "localhost:4000" }));
+vi.mock("../lib/auth/siwe", () => ({ authDomain: () => "localhost:4000", authUri: () => "http://localhost:4000" }));
 
 const ADDRESS = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 

@@ -3,6 +3,16 @@ import { validateSiwePayload } from "../lib/auth/siwe-validation";
 import { authDomain, authUri } from "../lib/auth/siwe";
 
 describe("SIWE server identity", () => {
+  it("rejects unexpanded shell expressions instead of issuing an invalid identity", () => {
+    const invalid = "${NEXT_PUBLIC_APP_URL:-http://localhost:${PORT:-4000}}";
+    expect(() => authUri(invalid)).toThrow("NEXT_PUBLIC_APP_URL");
+    expect(() => authDomain(invalid)).toThrow("NEXT_PUBLIC_APP_URL");
+  });
+
+  it("rejects non-web protocols", () => {
+    expect(() => authUri("ftp://example.com")).toThrow("NEXT_PUBLIC_APP_URL");
+  });
+
   it("derives a canonical origin and host from the configured app URL", () => {
     expect(authUri("https://example.com/app/ignored?x=1")).toBe("https://example.com");
     expect(authDomain("https://example.com/app/ignored?x=1")).toBe("example.com");

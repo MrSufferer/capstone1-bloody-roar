@@ -45,20 +45,15 @@ export function authUri(rawUrl?: string): string {
   const target = rawUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:4000";
   try {
     const parsed = new URL(target);
-    return `${parsed.protocol}//${parsed.host}`;
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Invalid protocol");
+    return parsed.origin;
   } catch {
-    return "http://localhost:4000";
+    throw new Error("NEXT_PUBLIC_APP_URL must be a valid HTTP or HTTPS URL");
   }
 }
 
 export function authDomain(rawUrl?: string): string {
-  const target = rawUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:4000";
-  try {
-    const parsed = new URL(target.startsWith("http") ? target : `http://${target}`);
-    return parsed.host;
-  } catch {
-    return target.replace(/^https?:\/\//, "").split("/")[0] ?? "localhost:4000";
-  }
+  return new URL(authUri(rawUrl)).host;
 }
 
 export async function issueAuthToken(walletAddress: string): Promise<string> {
