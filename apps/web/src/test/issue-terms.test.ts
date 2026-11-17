@@ -61,6 +61,24 @@ const createInput = {
   tokenId: usdc.id,
 };
 
+describe("Issue automated checks warning", () => {
+  const query = `mutation($input: CreateIssueInput!) { createIssue(input: $input) { id status noExecutableTests } }`;
+  it.each([
+    ["no test cases", [], true],
+    ["text-only criteria", [{ id: "text", testCode: null, isApproved: true }], true],
+    ["unapproved code", [{ id: "draft", testCode: "test()", isApproved: false }], true],
+    ["approved code with a failed base run", [{ id: "approved", testCode: "test()", isApproved: true, baseStatus: "failed" }], false],
+  ])("allows posting with %s and reports effective checks", async (_name, cases, expected) => {
+    const db = { ...fakeDb(), testCase: { findMany: vi.fn(async ({ where }: { where: { isApproved?: boolean } }) =>
+      cases.filter((item) => item.testCode !== null && (!where.isApproved || item.isApproved))) } };
+    const result = await execute(query, { user: client, db }, { input: createInput });
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.createIssue).toMatchObject({ id: "issue-1", status: "OPEN", noExecutableTests: expected });
+    expect(db.issue.create).toHaveBeenCalledOnce();
+    expect(db.testCase.findMany).toHaveBeenCalledWith({ where: { issueId: "issue-1", testCode: { not: null }, isApproved: true }, orderBy: { id: "asc" } });
+  });
+});
+
 describe("createIssue bounty and deadline", () => {
   it("rejects a token from a different chain", async () => {
     const db = fakeDb();

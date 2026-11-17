@@ -5,6 +5,7 @@
 // - createIssue(input): post a new bounty (auth required)
 
 import { DAY_MS } from "@bloody-roar/shared/constants";
+import { executableCases } from "@bloody-roar/shared/test-runner";
 import { guardMessage } from "../../../ai/guard/service";
 import {
   builder,
@@ -120,6 +121,11 @@ export const IssueRef = builder.prismaObject("Issue", {
     bountyAmountRaw: t.string({
       description: "Budget in the token's smallest unit (integer string)",
       resolve: (issue) => issueBountyRaw(issue).toString(),
+    }),
+    noExecutableTests: t.boolean({
+      description: "True when this bounty has no approved executable checks",
+      nullable: false,
+      resolve: async (issue, _args, ctx) => (await executableCases(ctx.db, issue.id, true)).length === 0,
     }),
     requiredSkills: t.exposeStringList("requiredSkills"),
     difficulty: t.exposeString("difficulty", { nullable: true }),

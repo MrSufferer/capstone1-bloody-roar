@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphQLRequestError } from "../lib/graphql-client";
 import { TestCasePanel } from "../components/issues/test-case-panel";
@@ -9,7 +9,7 @@ import { useToastStore } from "../lib/toast";
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("../lib/graphql-client", async (importOriginal) => ({ ...(await importOriginal<object>()), graphqlRequest: request }));
 
-beforeEach(() => useToastStore.setState({ items: [] }));
+beforeEach(() => { useToastStore.setState({ items: [] }); request.mockReset(); });
 
 describe("manual acceptance criteria", () => {
   it("offers manual entry when AI is unavailable and creates, approves and deletes a criterion", async () => {
@@ -47,4 +47,22 @@ it("shows a load error instead of claiming criteria are empty", async () => {
   render(<><TestCasePanel issueId="issue1" owner issueStatus="OPEN" /><Toaster /></>);
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not load acceptance criteria");
   expect(screen.queryByText("No acceptance criteria have been added yet.")).not.toBeInTheDocument();
+});
+
+it("does not report empty checks before criteria load successfully", async () => {
+  let finish!: (value: { testCases: unknown[] }) => void;
+  request.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const changed = vi.fn();
+  render(<TestCasePanel issueId="loading-checks" owner issueStatus="OPEN" onExecutableChange={changed} />);
+  expect(changed).not.toHaveBeenCalled();
+  await act(async () => finish({ testCases: [] }));
+  await waitFor(() => expect(changed).toHaveBeenCalledWith(false));
+});
+
+it("does not change check availability when loading criteria fails", async () => {
+  request.mockRejectedValueOnce(new Error("offline"));
+  const changed = vi.fn();
+  render(<><TestCasePanel issueId="failed-checks" owner issueStatus="OPEN" onExecutableChange={changed} /><Toaster /></>);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not load acceptance criteria");
+  expect(changed).not.toHaveBeenCalled();
 });
