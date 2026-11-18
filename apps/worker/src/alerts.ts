@@ -36,7 +36,6 @@ export const alertsJob: Job = {
   name: "alerts",
   everyMs: 30_000,
   async run({ db, config, log, now, rpc }) {
-    health.queuedTestRuns = await db.testRun.count({ where: { status: "QUEUED" } });
     const behind = health.lastSafeBlock !== null && health.lastScannedBlock !== null && health.lastSafeBlock > health.lastScannedBlock;
     const lagSeconds = behind && health.cursorMovedAt !== null ? (now().getTime() - health.cursorMovedAt) / 1000 : null;
     const alerts = evaluateAlerts({ lagSeconds, rpcErrorStreak: health.rpcErrorStreak });
@@ -47,14 +46,19 @@ export const alertsJob: Job = {
       if (low && !lowGasReported) alerts.push("RELAYER_LOW_GAS");
       lowGasReported = low;
     }
-    const overdue = await db.testRun.findMany({
-      where: { status: "QUEUED", createdAt: { lt: new Date(now().getTime() - 15 * 60_000) }, OR: [{ log: null }, { log: { not: { contains: QUEUED_RUN_ALERT } } }] },
-      select: { id: true, log: true },
-    });
-    for (const run of overdue) {
-      // shortcut: claiming before delivery prevents repeats after restart; use an outbox if delivery must be guaranteed.
-      const claimed = await db.testRun.updateMany({ where: { id: run.id, status: "QUEUED", log: run.log }, data: { log: [run.log, QUEUED_RUN_ALERT].filter(Boolean).join("\n") } });
-      if (claimed.count) alerts.push(`${QUEUED_RUN_ALERT} ${run.id}`);
+    try {
+      health.queuedTestRuns = await db.testRun.count({ where: { status: "QUEUED" } });
+      const overdue = await db.testRun.findMany({
+        where: { status: "QUEUED", createdAt: { lt: new Date(now().getTime() - 15 * 60_000) }, OR: [{ log: null }, { log: { not: { contains: QUEUED_RUN_ALERT } } }] },
+        select: { id: true, log: true },
+      });
+      for (const run of overdue) {
+        // shortcut: claiming before delivery prevents repeats after restart; use an outbox if delivery must be guaranteed.
+        const claimed = await db.testRun.updateMany({ where: { id: run.id, status: "QUEUED", log: run.log }, data: { log: [run.log, QUEUED_RUN_ALERT].filter(Boolean).join("\n") } });
+        if (claimed.count) alerts.push(`${QUEUED_RUN_ALERT} ${run.id}`);
+      }
+    } catch {
+      alerts.push("DB_UNREACHABLE");
     }
     if (alerts.length === 0) return;
     for (const alert of alerts) log.warn({ alert }, "worker alert");
