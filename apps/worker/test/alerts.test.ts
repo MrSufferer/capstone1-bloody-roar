@@ -9,7 +9,7 @@ test("alerts below the relayer gas threshold, not at the threshold", () => {
 test("deduplicates low gas alerts until the relayer recovers", async () => {
   let balance = "0x63";
   const warnings: Array<{ alert: string }> = [];
-  const ctx = { config: { relayerPrivateKey: `0x${"11".repeat(32)}`, relayerMinGasWei: 100n }, now: () => new Date(), rpc: { call: async () => balance }, log: { warn: (item: { alert: string }) => warnings.push(item), error() {} } };
+  const ctx = { db: { testRun: { count: async () => 0, findMany: async () => [] } }, config: { relayerPrivateKey: `0x${"11".repeat(32)}`, relayerMinGasWei: 100n }, now: () => new Date(), rpc: { call: async () => balance }, log: { warn: (item: { alert: string }) => warnings.push(item), error() {} } };
   await alertsJob.run(ctx as never); await alertsJob.run(ctx as never);
   balance = "0x64"; await alertsJob.run(ctx as never);
   balance = "0x63"; await alertsJob.run(ctx as never);
