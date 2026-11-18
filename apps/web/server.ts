@@ -21,10 +21,23 @@ import { tokenFromCookieHeader, verifyJWT } from "./src/lib/auth";
 const dev = process.env.NODE_ENV !== "production";
 // Containers (Railway/Docker) set HOSTNAME to the container id, so never use it to bind.
 const hostname = process.env.BIND_HOST || (dev ? "localhost" : "0.0.0.0");
-const port = Number.parseInt(process.env.PORT || "4000", 10);
+
+// Safe port parsing: handles Windows where bash syntax like ${PORT:-4000} is passed literally
+const parsePort = (val: string | undefined, fallback = 4000): number => {
+  if (!val) return fallback;
+  const num = Number.parseInt(val, 10);
+  if (!Number.isNaN(num)) return num;
+  const cleaned = Number.parseInt(val.replace(/[^0-9]/g, ""), 10);
+  return Number.isNaN(cleaned) ? fallback : cleaned;
+};
+const port = parsePort(process.env.PORT, 4000);
+
+const rawAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 const appUrl = dev
   ? `http://localhost:${port}`
-  : process.env.NEXT_PUBLIC_APP_URL ?? `http://${hostname}:${port}`;
+  : rawAppUrl && !rawAppUrl.includes("${")
+    ? rawAppUrl
+    : `http://${hostname}:${port}`;
 
 // Initialize Next.js
 const app = next({ dev, hostname, port });

@@ -24,18 +24,19 @@ export function sourceContext(files: Record<string, string>, description: string
   }
   return context;
 }
-async function textFiles(root: string, relative = "", files: Record<string, string> = {}, collect = true) {
+async function textFiles(root: string, relative = "", files: Record<string, string> = {}, collect = true, fileTree: Array<{ path: string; size: number }> = []) {
   for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
     const key = path.posix.join(relative, entry.name);
     if (sensitiveSourceFile(key)) { await rm(path.join(root, key), { recursive: true, force: true }); continue; }
-    if (entry.isDirectory()) await textFiles(root, key, files, collect && ![".git", "node_modules", "dist", ".venv", "__pycache__"].includes(entry.name));
+    if (entry.isDirectory()) await textFiles(root, key, files, collect && ![".git", "node_modules", "dist", ".venv", "__pycache__"].includes(entry.name), fileTree);
     else if (entry.isFile()) {
       const data = await readFile(path.join(root, key));
       if (sensitiveSourceFile(key, data.toString("utf8"))) { await rm(path.join(root, key)); continue; }
+      fileTree.push({ path: key, size: data.byteLength });
       if (collect && data.length <= 100_000 && !data.includes(0)) files[key] = data.toString("utf8");
     }
   }
-  return files;
+  return { files, fileTree };
 }
 export const sourceSnapshotJob: Job = {
   name: "source-snapshot", everyMs: 10_000,
@@ -76,13 +77,14 @@ export const sourceSnapshotJob: Job = {
         if (createHash("sha256").update(bytes).digest("hex") !== attachment.sha256) throw new Error("Source checksum mismatch");
         const zip = path.join(temp, "source.zip"); await writeFile(zip, bytes); await extractArchive(zip, work);
       }
-      const files = await textFiles(work), detected = detectFramework(files);
+      const { files, fileTree } = await textFiles(work), detected = detectFramework(files);
+      fileTree.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
       await run(["python3", "-c", "import sys,tarfile; t=tarfile.open(sys.argv[1],'w:gz'); t.add(sys.argv[2],arcname='.'); t.close()", archive, work]);
       // shortcut: snapshots live on one worker's disk; move to shared storage before running multiple workers.
       await mkdir(config.snapshotDir, { recursive: true });
       const bytes = await readFile(archive), storagePath = path.join(config.snapshotDir, `${randomUUID()}.tar.gz`);
       await writeFile(storagePath, bytes);
-      await db.$transaction((tx) => tx.sourceSnapshot.update({ where: { id: snapshot.id }, data: { ...detected, commitSha, storagePath, sha256: createHash("sha256").update(bytes).digest("hex"), context: sourceContext(files, `${snapshot.issue.title} ${snapshot.issue.description}`), status: "READY", error: null } }));
+      await db.$transaction((tx) => tx.sourceSnapshot.update({ where: { id: snapshot.id }, data: { ...detected, fileTree, commitSha, storagePath, sha256: createHash("sha256").update(bytes).digest("hex"), context: sourceContext(files, `${snapshot.issue.title} ${snapshot.issue.description}`), status: "READY", error: null } }));
     } catch (error) { await db.$transaction((tx) => tx.sourceSnapshot.update({ where: { id: snapshot.id }, data: { status: "FAILED", error: String(error instanceof Error ? error.message : error).slice(0, 500) } })); }
     finally { await rm(temp, { recursive: true, force: true }); }
   },

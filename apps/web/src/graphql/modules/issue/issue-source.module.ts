@@ -1,10 +1,20 @@
 import { z } from "zod";
+import { Prisma } from "@bloody-roar/database";
 import { builder } from "../../builder";
 import { requireAuth } from "../../context";
 import { gqlError, parseOrThrow } from "../../errors";
 import { lockCriteriaIssue } from "../ai/ai.module";
 
+const SourceFileRef = builder.objectRef<{ path: string; size: number }>("SourceFile").implement({
+  fields: (t) => ({ path: t.exposeString("path"), size: t.exposeInt("size") }),
+});
+
 const SourceRef = builder.prismaObject("SourceSnapshot", { fields: (t) => ({
+  fileTree: t.field({
+    type: [SourceFileRef], nullable: true, select: { fileTree: true },
+    description: "Paths and byte sizes of sanitized snapshot files, visible only to the bounty owner",
+    resolve: (source) => source.fileTree as Array<{ path: string; size: number }> | null,
+  }),
   downloadUrl: t.string({ nullable: true, resolve: async (source, _args, ctx) => {
     if (!ctx.user || source.status !== "READY") return null;
     const issue = await ctx.db.issue.findUnique({ where: { id: source.issueId }, select: { clientId: true, developerId: true, status: true } });
@@ -24,7 +34,7 @@ builder.queryField("issueSource", (t) => t.prismaField({
     if (!owner && (issue.isDraft || issue.hiddenAt)) throw gqlError("Source is private", "FORBIDDEN");
     const source = await ctx.db.sourceSnapshot.findUnique({ ...query, where: { issueId } });
     if (!source || (!owner && source.status !== "READY")) return null;
-    return owner ? source : { ...source, context: null, error: null };
+    return owner ? source : { ...source, fileTree: null, context: null, error: null };
   },
 }));
 const inputSchema = z.object({
@@ -44,7 +54,7 @@ builder.mutationField("setIssueSource", (t) => t.prismaField({
       await tx.testCase.updateMany({ where: { issueId, isApproved: false }, data: { testCode: null, baseStatus: null } });
       await tx.testRun.updateMany({ where: { issueId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "ERROR", log: "Source changed", finishedAt: new Date() } });
       await tx.issue.update({ where: { id: issueId }, data: { termsVersion: { increment: 1 } } });
-      const data = { repoUrl: input.repoUrl ?? null, ref: input.ref ?? null, attachmentId: input.attachmentId ?? null, commitSha: null, storagePath: null, sha256: null, context: null, error: null, attempts: 0, framework: null, installCommand: null, status: "PENDING" as const };
+      const data = { repoUrl: input.repoUrl ?? null, ref: input.ref ?? null, attachmentId: input.attachmentId ?? null, commitSha: null, storagePath: null, sha256: null, context: null, fileTree: Prisma.DbNull, error: null, attempts: 0, framework: null, installCommand: null, status: "PENDING" as const };
       return tx.sourceSnapshot.upsert({ ...query, where: { issueId }, create: { issueId, ...data }, update: data });
     });
   },

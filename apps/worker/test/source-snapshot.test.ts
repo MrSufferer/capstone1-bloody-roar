@@ -61,7 +61,8 @@ test("snapshot filters secrets and performs source I/O outside transactions", as
     const zip = path.join(upload, "source.zip");
     await command(["python3", "-c", `import sys,zipfile
 with zipfile.ZipFile(sys.argv[1],'w') as z:
- for name,data in {'requirements.txt':'pytest', '.env':'PRIVATE_KEY=secret', '.env.example':'HOST=localhost', 'cert.pem':bytes(100001), 'binary.dat':b'\\x00API_KEY=hidden', 'config.py':'SECRET=hidden', 'safe.py':'value=42'}.items(): z.writestr(name,data)`, zip], dir);
+ for name,data in {'requirements.txt':'pytest', '.env':'PRIVATE_KEY=secret', '.env.example':'HOST=localhost', 'cert.pem':bytes(100001), 'binary.dat':b'\\x00API_KEY=hidden', 'config.py':'SECRET=hidden', 'safe.py':'value=42', 'image.bin':bytes([0,1,2]), 'large.txt':b'x'*100001, 'unicode.txt':'xin chào', 'dist/generated.js':'safe artifact'}.items(): z.writestr(name,data)
+ for i in range(450): z.writestr(f'src/file{i:03}.ts', '// safe')`, zip], dir);
     const snapshot = { id: "snapshot", issueId: "issue", attachmentId: "attachment", repoUrl: null, issue: { title: "safe", description: "source" } };
     const updates: Array<Record<string, unknown>> = [];
     let inTransaction = false;
@@ -72,7 +73,23 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
     const ready = updates.find((data) => data.status === "READY");
     expect(ready, JSON.stringify(updates)).toBeDefined();
     const extracted = path.join(dir, "extracted"); await mkdir(extracted); await extractArchive(String(ready!.storagePath), extracted);
-    expect((await readdir(extracted)).sort()).toEqual([".env.example", "requirements.txt", "safe.py"]);
+    const tree = ready!.fileTree as Array<{ path: string; size: number }>;
+    expect(Array.isArray(tree)).toBe(true);
+    expect(tree).toHaveLength(457);
+    expect(tree.map((file) => file.path)).toEqual(tree.map((file) => file.path).sort());
+    for (const file of tree) {
+      expect(file).toEqual({ path: expect.any(String), size: expect.any(Number) });
+      expect((await readFile(path.join(extracted, file.path))).byteLength).toBe(file.size);
+    }
+    expect(tree).toContainEqual({ path: "src/file449.ts", size: 7 });
+    expect(tree).toContainEqual({ path: "image.bin", size: 3 });
+    expect(tree).toContainEqual({ path: "large.txt", size: 100001 });
+    expect(tree).toContainEqual({ path: "unicode.txt", size: Buffer.byteLength("xin chào") });
+    expect(tree).toContainEqual({ path: "dist/generated.js", size: 13 });
+    for (const excluded of [".env", "cert.pem", "binary.dat", "config.py"]) {
+      expect(tree.some((file) => file.path === excluded)).toBe(false);
+    }
+    expect(await readdir(extracted)).not.toContain(".env");
     expect(ready!.context).not.toContain("hidden");
   } finally { await rm(dir, { recursive: true, force: true }); await rm(upload, { recursive: true, force: true }); }
 });
