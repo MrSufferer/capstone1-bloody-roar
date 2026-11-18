@@ -1,10 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { isAllowedDatabase } from "../scripts/assert-local-db";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, copyFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 describe("local database guard", () => {
+  test.each(["db:migrate", "db:push", "db:reset"])("%s checks the package .env before Prisma", async (name) => {
+    const root = await mkdtemp(path.join(tmpdir(), "br-env-"));
+    const dir = path.join(root, "packages/database");
+    try {
+      await mkdir(path.join(dir, "scripts"), { recursive: true });
+      await copyFile(path.resolve(import.meta.dir, "../scripts/assert-local-db.ts"), path.join(dir, "scripts/assert-local-db.ts"));
+      await writeFile(path.join(root, ".env"), "DATABASE_URL=postgresql://localhost/db\n");
+      await writeFile(path.join(dir, ".env"), "DATABASE_URL=postgresql://db.supabase.com/db\n");
+      await writeFile(path.join(dir, "prisma"), "#!/bin/sh\necho PRISMA_INVOKED\n", { mode: 0o755 });
+      const { scripts } = await Bun.file(new URL("../package.json", import.meta.url)).json();
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, ALLOW_REMOTE_DB: "0" };
+      delete env.DATABASE_URL; delete env.DIRECT_URL;
+      const result = Bun.spawnSync(["sh", "-c", scripts[name]], { cwd: dir, env });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).not.toContain("PRISMA_INVOKED");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   test("allows localhost and loopback", () => {
     expect(isAllowedDatabase("postgresql://localhost/db")).toBe(true);
     expect(isAllowedDatabase("postgresql://127.0.0.1/db")).toBe(true);
