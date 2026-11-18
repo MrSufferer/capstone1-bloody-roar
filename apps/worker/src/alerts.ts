@@ -57,7 +57,8 @@ export const alertsJob: Job = {
         const claimed = await db.testRun.updateMany({ where: { id: run.id, status: "QUEUED", log: run.log }, data: { log: [run.log, QUEUED_RUN_ALERT].filter(Boolean).join("\n") } });
         if (claimed.count) alerts.push(`${QUEUED_RUN_ALERT} ${run.id}`);
       }
-    } catch {
+    } catch (err) {
+      log.error({ err: errorMessage(err) }, "queued run check failed");
       alerts.push("DB_UNREACHABLE");
     }
     if (alerts.length === 0) return;
