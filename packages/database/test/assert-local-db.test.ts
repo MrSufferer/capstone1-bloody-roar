@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { isAllowedDatabase } from "../scripts/assert-local-db";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 describe("local database guard", () => {
   test("allows localhost and loopback", () => {
@@ -10,5 +13,21 @@ describe("local database guard", () => {
     expect(isAllowedDatabase("postgresql://db.supabase.com/db")).toBe(false);
     expect(isAllowedDatabase(undefined)).toBe(false);
     expect(isAllowedDatabase("postgresql://db.supabase.com/db", "1")).toBe(true);
+  });
+  test("db:migrate refuses a remote database before invoking Prisma", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "br-migrate-"));
+    try {
+      await writeFile(path.join(dir, "prisma"), "#!/bin/sh\necho PRISMA_INVOKED\n", { mode: 0o755 });
+      const { scripts } = await Bun.file(new URL("../package.json", import.meta.url)).json();
+      const result = Bun.spawnSync(["sh", "-c", scripts["db:migrate"]], {
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, DATABASE_URL: "postgresql://db.supabase.com/db", ALLOW_REMOTE_DB: "0" },
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain("DATABASE_URL must point to localhost");
+      expect(result.stdout.toString()).not.toContain("PRISMA_INVOKED");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
