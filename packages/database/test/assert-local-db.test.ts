@@ -15,6 +15,7 @@ describe("local database guard", () => {
       await writeFile(path.join(dir, ".env"), "DATABASE_URL=postgresql://db.supabase.com/db\n");
       await writeFile(path.join(dir, "prisma"), "#!/bin/sh\necho PRISMA_INVOKED\n", { mode: 0o755 });
       const { scripts } = await Bun.file(new URL("../package.json", import.meta.url)).json();
+      await writeFile(path.join(dir, "package.json"), JSON.stringify({ scripts }));
       const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, ALLOW_REMOTE_DB: "0" };
       delete env.DATABASE_URL; delete env.DIRECT_URL;
       const result = Bun.spawnSync(["sh", "-c", scripts[name]], { cwd: dir, env });
