@@ -73,9 +73,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("patch secret scan", () => {
     return prisma.testRun.create({ data: { issueId, submissionId, kind: "SUBMISSION", bundleSha256, patchSha256: sha256 } });
   }
 
-  test("rejects a patch secret without calling the sandbox or recording secret bytes", async () => {
+  test.each([
+    ["literal", "API_KEY=", ""],
+    ["environment fallback", 'const API_KEY = process.env.API_KEY || "', '";'],
+    ["another assignment on the same line", 'const API_KEY = process.env.API_KEY; const SECRET = "', '";'],
+  ])("rejects a patch secret (%s) without sandbox execution or secret logs", async (_name, prefix, suffix) => {
     const secret = `sk-${"fake-secret-for-test".repeat(3)}`;
-    const run = await queuePatch(`+API_KEY=${secret}\n`);
+    const run = await queuePatch(`+${prefix}${secret}${suffix}\n`);
     await testRunsJob.run(context());
     const recorded = await prisma.testRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(recorded.status).toBe("ERROR");
@@ -83,7 +87,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("patch secret scan", () => {
     expect(JSON.stringify(recorded)).not.toContain(secret);
     expect(JSON.stringify(warnings)).toContain("PATCH_CONTAINS_SECRET");
     expect(JSON.stringify(warnings)).not.toContain(secret);
+    expect(warnings).toContainEqual([{ runId: run.id, code: "PATCH_CONTAINS_SECRET", pattern: "source-privacy:credential-assignment" }, "patch rejected"]);
     expect(sandboxRun).not.toHaveBeenCalled();
+  });
+
+  test("ignores secrets in file headers, context and removed lines", async () => {
+    const run = await queuePatch('diff --git a/API_KEY=filename.ts b/API_KEY=filename.ts\n--- a/API_KEY=filename.ts\n+++ b/API_KEY=filename.ts\n@@ -1,2 +1,2 @@\n const API_KEY = process.env.API_KEY;\n-const SECRET = "removed-secret";\n+export const enabled = true;\n');
+    await testRunsJob.run(context());
+    expect(sandboxRun).toHaveBeenCalledTimes(1);
+    expect(await prisma.testRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "PASSED", log: "clean sandbox log" });
+  });
+
+  test("allows an added assignment that only reads process.env.API_KEY", async () => {
+    const run = await queuePatch("+const API_KEY = process.env.API_KEY;\n");
+    await testRunsJob.run(context());
+    expect(sandboxRun).toHaveBeenCalledTimes(1);
+    expect(await prisma.testRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "PASSED" });
   });
 
   test("a clean patch still runs and records its sandbox result", async () => {
