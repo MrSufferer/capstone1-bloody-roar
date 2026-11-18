@@ -98,8 +98,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("patch secret scan", () => {
     expect(await prisma.testRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "PASSED", log: "clean sandbox log" });
   });
 
-  test("allows an added assignment that only reads process.env.API_KEY", async () => {
-    const run = await queuePatch("+const API_KEY = process.env.API_KEY;\n");
+  test.each(["const API_KEY = process.env.API_KEY;", "JWT_SECRET: z.string().min(32),", "OPENAI_API_KEY=", "API_KEY: process.env.API_KEY,"])("allows a clean configuration line: %s", async (line) => {
+    const run = await queuePatch(`+${line}\n`);
     await testRunsJob.run(context());
     expect(sandboxRun).toHaveBeenCalledTimes(1);
     expect(await prisma.testRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({ status: "PASSED" });

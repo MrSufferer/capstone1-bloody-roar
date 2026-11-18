@@ -36,11 +36,10 @@ export const testRunsJob: Job = {
         if (!patch || patch.sha256 !== run.patchSha256) throw new Error("No patch file");
         const bytes = await readAttachment(patch.fileUrl);
         if (createHash("sha256").update(bytes).digest("hex") !== run.patchSha256) throw new Error("Patch checksum mismatch");
-        // Ignore standalone environment reads; fallbacks and extra assignments still get scanned.
         const additions = Buffer.from(bytes).toString("utf8").split(/\r?\n/)
           .filter((line) => line.startsWith("+") && !line.startsWith("+++ ")).map((line) => line.slice(1))
-          .filter((line) => !/^\s*(?:(?:export\s+)?(?:const|let|var)\s+)?[A-Za-z_$][\w$]*\s*=\s*process\.env\.[A-Za-z_$][\w$]*;?\s*$/.test(line)).join("\n");
-        if (sensitiveSourceFile("", additions)) {
+          .filter((line) => sensitiveSourceFile("", line) && /["'][\w+/=-]{16,}["']|[:=]\s*[\w+/=-]{16,}\s*$/.test(line));
+        if (additions.length) {
           log.warn({ runId: run.id, code: "PATCH_CONTAINS_SECRET", pattern: "source-privacy:credential-assignment" }, "patch rejected");
           throw new Error("PATCH_CONTAINS_SECRET source-privacy:credential-assignment");
         }
