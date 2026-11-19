@@ -102,3 +102,33 @@ test.skipIf(!process.env.DOCKER_TESTS)("Python sandbox imports packages from the
     expect(result.results).toMatchObject([{ testCaseId: "src-import", status: "passed" }]);
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("runner rejects patches adding configuration files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-config-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "change.patch");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    for (const [file, framework] of [["vitest.config.ts", "VITEST"], ["conftest.py", "PYTEST"]] as const) {
+      await writeFile(patchPath, `diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1 @@\n+malicious config\n`);
+      const result = await runInSandbox({ snapshotPath, patchPath, framework, installCommand: "", files: [{ id: "red", path: "__bloodyroar__/red.test.ts", code: "" }] });
+      expect(result.status).toBe("error");
+      expect(result.log).toContain("PATCH_TOUCHES_RUNNER_CONFIG");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("pytest ignores addopts from a patched pyproject", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-pytest-config-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    await writeFile(path.join(source, "pyproject.toml"), '[project]\nname="fixture"\nversion="1.0.0"\ndependencies=["pytest==8.3.5"]\n');
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "change.patch");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    await writeFile(patchPath, 'diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n+++ b/pyproject.toml\n@@ -2,3 +2,6 @@\n name="fixture"\n version="1.0.0"\n dependencies=["pytest==8.3.5"]\n+\n+[tool.pytest.ini_options]\n+addopts = "-p nonexistent_patch_plugin"\n');
+    const result = await runInSandbox({ snapshotPath, patchPath, framework: "PYTEST", installCommand: "", files: [{ id: "red", path: "__bloodyroar__/test_red.py", code: 'import pytest\n@pytest.mark.parametrize("value", [1], ids=["TC:red"])\ndef test_red(value):\n    assert value == 2\n' }] });
+    expect(result.status, result.log).toBe("failed");
+    expect(result.results).toMatchObject([{ testCaseId: "red", status: "failed" }]);
+    expect(result.log).not.toContain("nonexistent_patch_plugin");
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
