@@ -48,6 +48,17 @@ export async function runInSandbox(input: { snapshotPath: string; patchPath?: st
   try {
     if (!input.files.length || input.files.some((f) => !validTestPath(f.path)) || new Set(input.files.map((f) => f.path)).size !== input.files.length) throw new Error("Invalid test file paths");
     await mkdir(work); await extractArchive(input.snapshotPath, work);
+    let pytestConfig: { name: string; content: string } | undefined;
+    if (input.framework === "PYTEST") {
+      for (const name of ["pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"]) {
+        const content = await readFile(path.join(work, name), "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+        if (content === null) continue;
+        if (name === "pyproject.toml" && !/^\s*\[tool\.pytest\.ini_options\]\s*(?:#.*)?$/m.test(content)) continue;
+        if (name === "tox.ini" && !/^\s*\[pytest\]\s*(?:[#;].*)?$/m.test(content)) continue;
+        if (name === "setup.cfg" && !/^\s*\[tool:pytest\]\s*(?:[#;].*)?$/m.test(content)) continue;
+        pytestConfig = { name, content }; break;
+      }
+    }
     // Vitest needs Node worker threads; Bun remains the package installer.
     const image = input.framework === "VITEST" ? "bloodyroar-test-runner:1" : "python:3.12-slim";
     const docker = async (script: string, network: "none" | "bridge", timeout: number) => {
@@ -62,7 +73,10 @@ export async function runInSandbox(input: { snapshotPath: string; patchPath?: st
       // git apply does not execute project code and rejects paths outside the work tree.
       const initialized = await command(["git", "init", "-q"], work);
       if (initialized.code) throw new Error("Could not initialize patch work tree");
-      const { stdout } = await promisify(execFile)("git", ["apply", "--numstat", "-z", ".br.patch"], { cwd: work, maxBuffer: 10_000_000 });
+      let stdout: string;
+      try {
+        ({ stdout } = await promisify(execFile)("git", ["apply", "--numstat", "-z", ".br.patch"], { cwd: work, maxBuffer: 10_000_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } }));
+      } catch { log += "Patch does not apply"; return finish("error"); }
       const fields = stdout.split("\0");
       for (let i = 0; i < fields.length; i++) {
         const entry = fields[i]!;
@@ -70,7 +84,7 @@ export async function runInSandbox(input: { snapshotPath: string; patchPath?: st
         const name = entry.slice(entry.indexOf("\t", entry.indexOf("\t") + 1) + 1);
         const paths = name ? [name] : [fields[++i] ?? "", fields[++i] ?? ""];
         // Vitest 2.1.9 also loads workspace files with --config, so patches must not change them.
-        if (paths.some((p) => /^(?:conftest\.py|pytest\.ini|tox\.ini|setup\.cfg|sitecustomize\.py|usercustomize\.py|.*\.pth|vitest\.config\..+|vite\.config\..+|vitest\.workspace\..+)$/.test(path.posix.basename(p)))) {
+        if (paths.some((p) => /^(?:conftest\.py|pytest\.ini|sitecustomize\.py|usercustomize\.py|vitest\.config\..+|vite\.config\..+|vitest\.workspace\..+)$/.test(path.posix.basename(p)))) {
           log += "PATCH_TOUCHES_RUNNER_CONFIG"; return finish("error");
         }
       }
@@ -91,15 +105,28 @@ export async function runInSandbox(input: { snapshotPath: string; patchPath?: st
       await chmod(path.dirname(current), 0o777);
       await writeFile(current, file.code, { mode: 0o666 });
     }
-    const runnerConfig = path.join(work, input.framework === "VITEST" ? ".br-vitest.config.mjs" : ".br-pytest.ini");
-    await rm(runnerConfig, { recursive: true, force: true });
-    await writeFile(runnerConfig, input.framework === "VITEST" ? `export default { test: { include: ${JSON.stringify(input.files.map((f) => f.path))} } };` : "[pytest]\n");
+    let testConfig: string;
+    if (input.framework === "VITEST") {
+      const candidates = ["vitest.config", "vite.config"].flatMap((name) => ["js", "mjs", "ts", "cjs", "mts", "cts"].map((ext) => name + "." + ext));
+      let projectConfig: string | undefined;
+      for (const name of candidates) if (await lstat(path.join(work, name)).then((stat) => stat.isFile(), () => false)) { projectConfig = name; break; }
+      testConfig = ".br-vitest.config.mjs";
+      await rm(path.join(work, testConfig), { recursive: true, force: true });
+      const base = projectConfig ? `import project from ${JSON.stringify("./" + projectConfig)};` : "const project = {};";
+      await writeFile(path.join(work, testConfig), `${base} export default async (env) => { const config = await (typeof project === "function" ? project(env) : project); return { ...config, test: { ...config.test, include: ${JSON.stringify(input.files.map((f) => f.path))} } }; };`);
+    } else {
+      const dir = path.join(work, ".br-pytest-config");
+      await rm(dir, { recursive: true, force: true });
+      await mkdir(dir);
+      testConfig = `.br-pytest-config/${pytestConfig?.name ?? "pytest.ini"}`;
+      await writeFile(path.join(work, testConfig), pytestConfig?.content ?? "[pytest]\n");
+    }
     if (input.framework === "PYTEST") await writeFile(path.join(work, ".br-install.py"), await readFile(new URL("./install-python.py", import.meta.url)));
     const install = input.framework === "VITEST" ? "bun install --ignore-scripts" : "python -I .br-install.py";
     const installed = await docker(install, "bridge", 300_000);
     if (installed.code) return finish(installed.timedOut ? "timeout" : "error");
     const testPaths = input.files.map((file) => `'${file.path.replaceAll("'", "'\\''")}'`).join(" ");
-    const result = await docker(input.framework === "VITEST" ? `node node_modules/vitest/vitest.mjs run --config .br-vitest.config.mjs ${testPaths} --reporter=json --outputFile=/work/.br-results.json` : `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -c .br-pytest.ini --rootdir=/work -p no:cacheprovider ${testPaths} --junitxml=/work/.br-results.xml -q`, "none", input.timeoutMs ?? 600_000);
+    const result = await docker(input.framework === "VITEST" ? `node node_modules/vitest/vitest.mjs run --config .br-vitest.config.mjs ${testPaths} --reporter=json --outputFile=/work/.br-results.json` : `python -m pytest -c ${testConfig} --rootdir=/work -p no:cacheprovider ${testPaths} --junitxml=/work/.br-results.xml -q`, "none", input.timeoutMs ?? 600_000);
     if (result.timedOut) return finish("timeout");
     const report = path.join(work, input.framework === "VITEST" ? ".br-results.json" : ".br-results.xml");
     const stat = await lstat(report);
