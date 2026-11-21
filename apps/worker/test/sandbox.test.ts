@@ -175,6 +175,21 @@ test.skipIf(!process.env.DOCKER_TESTS)("pytest preserves project config and inst
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 300_000);
 
+test.skipIf(!process.env.DOCKER_TESTS)("pytest resolves snapshot pythonpath from the project root", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-pytest-pythonpath-")), source = path.join(root, "source");
+  try {
+    await mkdir(path.join(source, "lib"), { recursive: true });
+    await writeFile(path.join(source, "requirements.txt"), "pytest==8.3.5\n");
+    await writeFile(path.join(source, "pyproject.toml"), '[tool.pytest.ini_options]\npythonpath = ["lib"]\n');
+    await writeFile(path.join(source, "lib/mod.py"), "VALUE = 42\n");
+    const snapshotPath = path.join(root, "base.tar.gz");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    const result = await runInSandbox({ snapshotPath, framework: "PYTEST", installCommand: "", files: [{ id: "pythonpath", path: "__bloodyroar__/test_import.py", code: 'import pytest\nfrom mod import VALUE\n@pytest.mark.parametrize("expected", [42], ids=["TC:pythonpath"])\ndef test_import(expected):\n    assert VALUE == expected\n' }] });
+    expect(result.status, result.log).toBe("passed");
+    expect(result.results).toMatchObject([{ testCaseId: "pythonpath", status: "passed" }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
 test.skipIf(!process.env.DOCKER_TESTS)("pytest uses snapshot setup.cfg even when a patch changes it", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "br-pytest-setup-cfg-")), source = path.join(root, "source");
   try {

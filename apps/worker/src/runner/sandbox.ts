@@ -115,10 +115,9 @@ export async function runInSandbox(input: { snapshotPath: string; patchPath?: st
       const base = projectConfig ? `import project from ${JSON.stringify("./" + projectConfig)};` : "const project = {};";
       await writeFile(path.join(work, testConfig), `${base} export default async (env) => { const config = await (typeof project === "function" ? project(env) : project); return { ...config, test: { ...config.test, include: ${JSON.stringify(input.files.map((f) => f.path))} } }; };`);
     } else {
-      const dir = path.join(work, ".br-pytest-config");
-      await rm(dir, { recursive: true, force: true });
-      await mkdir(dir);
-      testConfig = `.br-pytest-config/${pytestConfig?.name ?? "pytest.ini"}`;
+      // Pytest resolves relative ini paths from the config file's directory.
+      testConfig = `.br-pytest${path.extname(pytestConfig?.name ?? "pytest.ini")}`;
+      await rm(path.join(work, testConfig), { recursive: true, force: true });
       await writeFile(path.join(work, testConfig), pytestConfig?.content ?? "[pytest]\n");
     }
     if (input.framework === "PYTEST") await writeFile(path.join(work, ".br-install.py"), await readFile(new URL("./install-python.py", import.meta.url)));
