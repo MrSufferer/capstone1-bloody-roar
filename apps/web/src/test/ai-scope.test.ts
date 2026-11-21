@@ -22,9 +22,27 @@ describe("checkIssueScope", () => {
     expect(sent).not.toContain(secret);
     expect(sent).toContain("[REDACTED]");
   });
+  it("trims and limits scope suggestions without discarding the response", async () => {
+    const suggestions = Array.from({ length: 9 }, (_, index) => `Suggestion ${index + 1}`);
+    completeAI.mockResolvedValue({ text: JSON.stringify({
+      ambiguities: [` ${"a".repeat(400)} `, ...suggestions.slice(1)],
+      openQuestions: [" ", ...suggestions],
+      difficulty: "MEDIUM",
+    }) });
+    await expect(call()).resolves.toEqual({
+      status: "OK",
+      ambiguities: ["a".repeat(300), ...suggestions.slice(1, 8)],
+      openQuestions: suggestions.slice(0, 8),
+      difficulty: "MEDIUM",
+    });
+  });
   it.each(["error", "bad json", "bad schema"])("returns unavailable for %s", async (kind) => {
     if (kind === "error") completeAI.mockRejectedValue(new Error("provider failed"));
     else completeAI.mockResolvedValue({ text: kind === "bad json" ? "{" : JSON.stringify({ ambiguities: [], openQuestions: [], difficulty: "UNKNOWN" }) });
+    await expect(call()).resolves.toEqual({ status: "AI_UNAVAILABLE", ambiguities: [], openQuestions: [], difficulty: null });
+  });
+  it("returns unavailable when a required field is missing", async () => {
+    completeAI.mockResolvedValue({ text: JSON.stringify({ ambiguities: [], difficulty: "MEDIUM" }) });
     await expect(call()).resolves.toEqual({ status: "AI_UNAVAILABLE", ambiguities: [], openQuestions: [], difficulty: null });
   });
   it("rejects non-owners and unauthenticated users before calling the model", async () => {

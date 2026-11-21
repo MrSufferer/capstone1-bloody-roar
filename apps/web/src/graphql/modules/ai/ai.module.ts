@@ -96,9 +96,12 @@ builder.queryField("testCases", (t) =>
 
 const ScopeDifficulty = builder.enumType("ScopeDifficulty", { values: ["EASY", "MEDIUM", "HARD"] as const });
 const ScopeStatus = builder.enumType("ScopeStatus", { values: ["OK", "AI_UNAVAILABLE"] as const });
+const ScopeSuggestionsSchema = z
+  .array(z.string().transform((item) => item.trim().slice(0, 300)))
+  .transform((items) => items.filter(Boolean).slice(0, 8));
 const ScopeSchema = z.object({
-  ambiguities: z.array(z.string().max(300)).max(8),
-  openQuestions: z.array(z.string().max(300)).max(8),
+  ambiguities: ScopeSuggestionsSchema,
+  openQuestions: ScopeSuggestionsSchema,
   difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
 });
 type ScopeResult = { status: "OK" | "AI_UNAVAILABLE"; ambiguities: string[]; openQuestions: string[]; difficulty: "EASY" | "MEDIUM" | "HARD" | null };
