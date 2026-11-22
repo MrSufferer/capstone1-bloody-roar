@@ -20,6 +20,23 @@ test("parses pytest JUnit failures and skips", async () => {
     expect((await parseJunit(file)).map((r) => r.status)).toEqual(["passed", "failed", "skipped"]);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+test.skipIf(!process.env.DOCKER_TESTS)("a passing test added by the patch cannot affect locked red tests", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-locked-tests-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    await writeFile(path.join(source, "package.json"), JSON.stringify({ type: "module", devDependencies: { vitest: "2.1.9" } }));
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "evil.patch");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    await writeFile(patchPath, 'diff --git a/__bloodyroar__/evil.test.ts b/__bloodyroar__/evil.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/__bloodyroar__/evil.test.ts\n@@ -0,0 +1 @@\n+import {test,expect} from "vitest"; test("[TC:evil] always passes",()=>{ console.log("EVIL_TEST_EXECUTED"); expect(true).toBe(true); });\n');
+    const result = await runInSandbox({ snapshotPath, patchPath, framework: "VITEST", installCommand: "", files: [
+      { id: "red", path: "__bloodyroar__/locked.test.ts", code: 'import {test,expect} from "vitest"; test("[TC:red] locked red",()=>expect(1).toBe(2));' },
+      { id: "clean", path: "__bloodyroar__/quoted dir/clean's.test.ts", code: 'import {test,expect} from "vitest"; import {existsSync} from "node:fs"; test("[TC:clean] only locked files remain",()=>expect(existsSync("__bloodyroar__/evil.test.ts")).toBe(false));' },
+    ] });
+    expect(result.status, result.log).toBe("failed");
+    expect(result.results).toMatchObject([{ testCaseId: "red", status: "failed" }, { testCaseId: "clean", status: "passed" }]);
+    expect(result.log).not.toContain("EVIL_TEST_EXECUTED");
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
 test.skipIf(!process.env.DOCKER_TESTS)("Docker runs base red, fixed patch green, bad patch red and blocks traversal", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "br-docker-fixture-")), source = path.join(root, "source");
   try {
@@ -83,5 +100,107 @@ test.skipIf(!process.env.DOCKER_TESTS)("Python sandbox imports packages from the
     const result = await runInSandbox({ snapshotPath, framework: "PYTEST", installCommand: "", files: [{ id: "src-import", path: "__bloodyroar__/test_x.py", code: 'import pytest\nfrom mypkg import VALUE\n@pytest.mark.parametrize("expected", [42], ids=["TC:src-import"])\ndef test_import(expected):\n    assert VALUE == expected\n' }] });
     expect(result.status, result.log).toBe("passed");
     expect(result.results).toMatchObject([{ testCaseId: "src-import", status: "passed" }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("runner rejects patches adding configuration files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-config-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "change.patch");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    for (const [file, framework] of [["vitest.config.ts", "VITEST"], ["conftest.py", "PYTEST"]] as const) {
+      await writeFile(patchPath, `diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1 @@\n+malicious config\n`);
+      const result = await runInSandbox({ snapshotPath, patchPath, framework, installCommand: "", files: [{ id: "red", path: "__bloodyroar__/red.test.ts", code: "" }] });
+      expect(result.status).toBe("error");
+      expect(result.log).toContain("PATCH_TOUCHES_RUNNER_CONFIG");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("pytest ignores addopts from a patched pyproject", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-pytest-config-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    await writeFile(path.join(source, "pyproject.toml"), '[project]\nname="fixture"\nversion="1.0.0"\ndependencies=["pytest==8.3.5"]\n');
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "change.patch");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    await writeFile(patchPath, 'diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n+++ b/pyproject.toml\n@@ -2,3 +2,6 @@\n name="fixture"\n version="1.0.0"\n dependencies=["pytest==8.3.5"]\n+\n+[tool.pytest.ini_options]\n+addopts = "-p nonexistent_patch_plugin"\n');
+    const result = await runInSandbox({ snapshotPath, patchPath, framework: "PYTEST", installCommand: "", files: [{ id: "red", path: "__bloodyroar__/test_red.py", code: 'import pytest\n@pytest.mark.parametrize("value", [1], ids=["TC:red"])\ndef test_red(value):\n    assert value == 2\n' }] });
+    expect(result.status, result.log).toBe("failed");
+    expect(result.results).toMatchObject([{ testCaseId: "red", status: "failed" }]);
+    expect(result.log).not.toContain("nonexistent_patch_plugin");
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test("malformed patches return the normal patch error", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-malformed-"));
+  try {
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "bad.patch");
+    expect((await command(["tar", "czf", snapshotPath, "--files-from", "/dev/null"], root)).code).toBe(0);
+    await writeFile(patchPath, "not a patch\n");
+    const result = await runInSandbox({ snapshotPath, patchPath, framework: "VITEST", installCommand: "", files: [{ id: "x", path: "__bloodyroar__/x.test.ts", code: "" }] });
+    expect(result.status).toBe("error");
+    expect(result.log).toContain("Patch does not apply");
+    expect(result.log).not.toContain("Command failed");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.skipIf(!process.env.DOCKER_TESTS)("Vitest preserves project alias and runs locked files outside project include", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-alias-")), source = path.join(root, "source");
+  try {
+    await mkdir(path.join(source, "src"), { recursive: true });
+    await writeFile(path.join(source, "package.json"), JSON.stringify({ type: "module", devDependencies: { vitest: "2.1.9" } }));
+    await writeFile(path.join(source, "vitest.config.ts"), 'import { defineConfig } from "vitest/config"; import { resolve } from "node:path"; export default defineConfig({ resolve: { alias: { "@": resolve(__dirname, "src") } }, test: { include: ["src/**/*.test.ts"] } });');
+    await writeFile(path.join(source, "src/value.ts"), "export const value = 42;\n");
+    const snapshotPath = path.join(root, "base.tar.gz");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    const result = await runInSandbox({ snapshotPath, framework: "VITEST", installCommand: "", files: [{ id: "alias", path: "__bloodyroar__/alias.test.ts", code: 'import {test,expect} from "vitest"; import {value} from "@/value"; test("[TC:alias] alias",()=>expect(value).toBe(42));' }] });
+    expect(result.status, result.log).toBe("passed");
+    expect(result.results).toMatchObject([{ testCaseId: "alias", status: "passed" }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("pytest preserves project config and installed async plugin", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-pytest-async-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    await writeFile(path.join(source, "requirements.txt"), "pytest==8.3.5\npytest-asyncio==0.25.3\n");
+    await writeFile(path.join(source, "pyproject.toml"), '[tool.pytest.ini_options]\nasyncio_mode = "auto"\n');
+    const snapshotPath = path.join(root, "base.tar.gz");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    const result = await runInSandbox({ snapshotPath, framework: "PYTEST", installCommand: "", files: [{ id: "async", path: "__bloodyroar__/test_async.py", code: 'import pytest\n@pytest.mark.parametrize("value", [1], ids=["TC:async"])\nasync def test_async(value):\n    assert value == 1\n' }] });
+    expect(result.status, result.log).toBe("passed");
+    expect(result.results).toMatchObject([{ testCaseId: "async", status: "passed" }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("pytest resolves snapshot pythonpath from the project root", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-pytest-pythonpath-")), source = path.join(root, "source");
+  try {
+    await mkdir(path.join(source, "lib"), { recursive: true });
+    await writeFile(path.join(source, "requirements.txt"), "pytest==8.3.5\n");
+    await writeFile(path.join(source, "pyproject.toml"), '[tool.pytest.ini_options]\npythonpath = ["lib"]\n');
+    await writeFile(path.join(source, "lib/mod.py"), "VALUE = 42\n");
+    const snapshotPath = path.join(root, "base.tar.gz");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    const result = await runInSandbox({ snapshotPath, framework: "PYTEST", installCommand: "", files: [{ id: "pythonpath", path: "__bloodyroar__/test_import.py", code: 'import pytest\nfrom mod import VALUE\n@pytest.mark.parametrize("expected", [42], ids=["TC:pythonpath"])\ndef test_import(expected):\n    assert VALUE == expected\n' }] });
+    expect(result.status, result.log).toBe("passed");
+    expect(result.results).toMatchObject([{ testCaseId: "pythonpath", status: "passed" }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 300_000);
+
+test.skipIf(!process.env.DOCKER_TESTS)("pytest uses snapshot setup.cfg even when a patch changes it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "br-pytest-setup-cfg-")), source = path.join(root, "source");
+  try {
+    await mkdir(source);
+    await writeFile(path.join(source, "requirements.txt"), "pytest==8.3.5\n");
+    await writeFile(path.join(source, "setup.cfg"), "[tool:pytest]\naddopts = --strict-markers\n");
+    const snapshotPath = path.join(root, "base.tar.gz"), patchPath = path.join(root, "change.patch");
+    expect((await command(["tar", "czf", snapshotPath, "-C", source, "."], root)).code).toBe(0);
+    await writeFile(patchPath, 'diff --git a/setup.cfg b/setup.cfg\n--- a/setup.cfg\n+++ b/setup.cfg\n@@ -1,2 +1,2 @@\n [tool:pytest]\n-addopts = --strict-markers\n+addopts = -p nonexistent_patch_plugin\n');
+    const result = await runInSandbox({ snapshotPath, patchPath, framework: "PYTEST", installCommand: "", files: [{ id: "safe", path: "__bloodyroar__/test_safe.py", code: 'import pytest\n@pytest.mark.parametrize("value", [1], ids=["TC:safe"])\ndef test_safe(value):\n    assert value == 1\n' }] });
+    expect(result.status, result.log).toBe("passed");
+    expect(result.results).toMatchObject([{ testCaseId: "safe", status: "passed" }]);
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 300_000);

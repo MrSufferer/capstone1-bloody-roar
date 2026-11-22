@@ -4,15 +4,15 @@
   "private": true,
   "scripts": {
     "db:generate": "bun --env-file=../../.env run prisma generate",
-    "db:migrate": "bun --env-file=../../.env run prisma migrate dev",
+    "db:migrate": "bun --env-file=../../.env --env-file=.env run scripts/assert-local-db.ts && bun --env-file=.env --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run prisma migrate dev",
     "db:migrate:prod": "bun --env-file=../../.env run prisma migrate deploy",
     "db:studio": "bun --env-file=../../.env run prisma studio",
     "db:seed": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run src/seed.ts",
     "db:seed:demo": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run src/seed-demo.ts",
     "db:seed:local": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run src/seed-local-token.ts",
     "db:seed:prod": "bun --env-file=../../.env run src/seed-prod.ts",
-    "db:push": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run prisma db push",
-    "db:reset": "bun --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run prisma migrate reset",
+    "db:push": "bun --env-file=../../.env --env-file=.env run scripts/assert-local-db.ts && bun --env-file=.env --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run prisma db push",
+    "db:reset": "bun --env-file=../../.env --env-file=.env run scripts/assert-local-db.ts && bun --env-file=.env --env-file=../../.env run scripts/assert-local-db.ts && bun --env-file=../../.env run prisma migrate reset",
     "test": "bun test ./test",
     "db:backfill:conversations": "bun --env-file=../../.env run src/backfill-conversations.ts"
   },

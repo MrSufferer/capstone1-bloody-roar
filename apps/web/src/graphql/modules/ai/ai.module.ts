@@ -94,6 +94,48 @@ builder.queryField("testCases", (t) =>
   }),
 );
 
+const ScopeDifficulty = builder.enumType("ScopeDifficulty", { values: ["EASY", "MEDIUM", "HARD"] as const });
+const ScopeStatus = builder.enumType("ScopeStatus", { values: ["OK", "AI_UNAVAILABLE"] as const });
+const ScopeSuggestionsSchema = z
+  .array(z.string().transform((item) => item.trim().slice(0, 300)))
+  .transform((items) => items.filter(Boolean).slice(0, 8));
+const ScopeSchema = z.object({
+  ambiguities: ScopeSuggestionsSchema,
+  openQuestions: ScopeSuggestionsSchema,
+  difficulty: z.enum(["EASY", "MEDIUM", "HARD"]),
+});
+type ScopeResult = { status: "OK" | "AI_UNAVAILABLE"; ambiguities: string[]; openQuestions: string[]; difficulty: "EASY" | "MEDIUM" | "HARD" | null };
+const ScopeRef = builder.objectRef<ScopeResult>("IssueScopeResult").implement({
+  fields: (t) => ({
+    status: t.expose("status", { type: ScopeStatus }),
+    ambiguities: t.exposeStringList("ambiguities"),
+    openQuestions: t.exposeStringList("openQuestions"),
+    difficulty: t.expose("difficulty", { type: ScopeDifficulty, nullable: true }),
+  }),
+});
+
+builder.mutationField("checkIssueScope", (t) => t.field({
+  type: ScopeRef,
+  args: { issueId: t.arg.string({ required: true }) },
+  resolve: async (_root, args, ctx) => {
+    const user = requireAuth(ctx);
+    aiRateLimit(user);
+    const issue = await ctx.db.issue.findUnique({ where: { id: args.issueId }, select: { id: true, clientId: true, title: true, description: true, category: true, requiredSkills: true } });
+    if (!issue) throw gqlError("Task not found", "NOT_FOUND");
+    if (issue.clientId !== user.id) throw gqlError("Only the task owner can check its scope", "FORBIDDEN");
+    const content = scanAndMask(JSON.stringify({ title: issue.title, description: issue.description, category: issue.category, requiredSkills: issue.requiredSkills })).content;
+    try {
+      const completion = await completeAI({ task: "TESTGEN", issueId: issue.id, jsonMode: true, messages: [
+        { role: "system", content: 'Identify ambiguities and developer questions without inventing requirements. Return JSON: {"ambiguities":string[],"openQuestions":string[],"difficulty":"EASY"|"MEDIUM"|"HARD"}. Maximum 8 items per list, 300 characters each.' },
+        { role: "user", content },
+      ] });
+      return { status: "OK" as const, ...ScopeSchema.parse(parseAIJson(completion.text)) };
+    } catch {
+      return { status: "AI_UNAVAILABLE" as const, ambiguities: [], openQuestions: [], difficulty: null };
+    }
+  },
+}));
+
 builder.mutationField("generateTestCases", (t) =>
   t.field({
     type: [TestCaseRef],
