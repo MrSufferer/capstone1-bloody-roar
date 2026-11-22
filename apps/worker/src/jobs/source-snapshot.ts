@@ -32,7 +32,7 @@ async function textFiles(root: string, relative = "", files: Record<string, stri
     else if (entry.isFile()) {
       const data = await readFile(path.join(root, key));
       if (sensitiveSourceFile(key, data.toString("utf8"))) { await rm(path.join(root, key)); continue; }
-      fileTree.push({ path: key, size: data.byteLength });
+      if (collect) fileTree.push({ path: key, size: data.byteLength });
       if (collect && data.length <= 100_000 && !data.includes(0)) files[key] = data.toString("utf8");
     }
   }
