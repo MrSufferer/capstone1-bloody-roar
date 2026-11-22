@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "PORT=${PORT:-4000} NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:${PORT:-4000}} bun run --cwd apps/web dev",
+    "dev": "bun run --cwd apps/web dev",
     "build": "bun run --cwd apps/web build",
     "start": "bun run --cwd apps/web start",
     "lint": "bun run --cwd apps/web lint",
@@ -24,7 +24,7 @@
     "contracts:compile": "bun run --cwd apps/contracts compile",
     "contracts:test": "bun run --cwd apps/contracts test",
     "contracts:deploy": "bun run --cwd apps/contracts deploy:local",
-    "contracts:sync-env": "bun -e 'const m = await Bun.file(\"apps/contracts/deployments/localhost.json\").json(); let env = await Bun.file(\".env\").text(); const set = (k, v) => { const re = new RegExp(`^${k}=.*$`, \"m\"); env = re.test(env) ? env.replace(re, `${k}=${v}`) : `${env.trimEnd()}\\n${k}=${v}\\n`; }; set(\"ESCROW_ADDRESS\", `\"${m.address}\"`); set(\"ESCROW_CONTRACT_ADDRESS\", m.address); set(\"ESCROW_DEPLOY_BLOCK\", String(m.deployBlock)); await Bun.write(\".env\", env); console.log(\"Synced .env with localhost.json:\", m.address);'",
+    "contracts:sync-env": "bun run scripts/sync-env.ts",
     "worker:start": "bun run --cwd apps/worker start",
     "worker:replay": "bun run --cwd apps/worker replay",
     "test:e2e:local": "bun run tests/e2e/run-local.ts"

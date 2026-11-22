@@ -14,8 +14,12 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
     return (
       error.response?.data?.error ??
       error.response?.data?.message ??
-      (error.response ? error.message : fallback)
+      (error.response ? error.message : "Cannot reach the server. Check your connection and try again.")
     );
   }
-  return error instanceof Error ? error.message : fallback;
+  if (typeof error === "object" && error !== null && "message" in error &&
+      typeof error.message === "string" && error.message.trim()) {
+    return error.message;
+  }
+  return fallback;
 }

@@ -17,7 +17,7 @@ let files: Array<{ id: string; fileUrl: string; sha256: string; fileMime: string
 function db() {
   const tx = { $queryRaw: vi.fn().mockResolvedValue([]), issue: { findUnique: vi.fn(async () => issue) },
     escrowProjection: { findUnique: vi.fn(async () => projection) },
-    submission: { findUnique: vi.fn(async () => existing), create: vi.fn(async ({ data }) => data), update: vi.fn(async ({ data, where }) => ({ ...data, id: where.id })) },
+    submission: { updateMany: vi.fn(async (_args: unknown) => ({ count: 1 })), findUnique: vi.fn(async () => existing), create: vi.fn(async ({ data }) => data), update: vi.fn(async ({ data, where }) => ({ ...data, id: where.id })) },
     transactionIntent: { findFirst: vi.fn().mockResolvedValue(null) },
     attachment: { findMany: vi.fn(async () => files) } };
   return { ...tx, tx, $transaction: vi.fn(async (fn: (value: typeof tx) => unknown) => fn(tx)) };
@@ -53,7 +53,21 @@ describe("createSubmissionDraft", () => {
     const result = await run(database, { id: "draft" });
     expect(result.errors).toBeUndefined();
     expect(database.tx.submission.update).not.toHaveBeenCalled();
+    expect(database.tx.submission.updateMany).toHaveBeenCalledWith({
+      where: { issueId: "issue", developerId: actor.id, status: "DRAFT" },
+      data: { status: "SUPERSEDED", supersededAt: expect.any(Date) },
+    });
     expect(database.tx.submission.create.mock.calls[0]![0].data.id).not.toBe("draft");
+  });
+  it("retires earlier drafts even when submissionId is omitted", async () => {
+    const database = db();
+    expect((await run(database)).errors).toBeUndefined();
+    expect(database.tx.submission.updateMany).toHaveBeenCalledWith({
+      where: { issueId: "issue", developerId: actor.id, status: "DRAFT" },
+      data: { status: "SUPERSEDED", supersededAt: expect.any(Date) },
+    });
+    expect(database.tx.submission.updateMany.mock.invocationCallOrder[0])
+      .toBeLessThan(database.tx.submission.create.mock.invocationCallOrder[0]!);
   });
   it("rejects a different developer, invalid phase, and expired deadline", async () => {
     issue.developerId = "other"; expect((await run()).errors?.[0]?.extensions?.code).toBe("FORBIDDEN");

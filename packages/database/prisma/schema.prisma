@@ -1037,7 +1037,9 @@ model SourceSnapshot {
   storagePath String?
   sha256 String?
   context String?
+  fileTree Json?
   status SourceSnapshotStatus @default(PENDING)
+  processingToken String?
   attempts Int @default(0)
   error String?
   createdAt DateTime @default(now())

@@ -1,3 +1,4 @@
+
 # Kế hoạch hoàn thiện dự án (đối chiếu code và Jira ngày 15/11/2026)
 
 Nhánh: `feat/payout-testrunner-chat`. Bản sửa lần 4.

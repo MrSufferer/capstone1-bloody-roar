@@ -61,18 +61,43 @@ test("snapshot filters secrets and performs source I/O outside transactions", as
     const zip = path.join(upload, "source.zip");
     await command(["python3", "-c", `import sys,zipfile
 with zipfile.ZipFile(sys.argv[1],'w') as z:
- for name,data in {'requirements.txt':'pytest', '.env':'PRIVATE_KEY=secret', '.env.example':'HOST=localhost', 'cert.pem':bytes(100001), 'binary.dat':b'\\x00API_KEY=hidden', 'config.py':'SECRET=hidden', 'safe.py':'value=42'}.items(): z.writestr(name,data)`, zip], dir);
+ for name,data in {'requirements.txt':'pytest', '.env':'PRIVATE_KEY=secret', '.env.example':'HOST=localhost', 'cert.pem':bytes(100001), 'binary.dat':b'\\x00API_KEY=hidden', 'config.py':'SECRET=hidden', 'safe.py':'value=42', 'image.bin':bytes([0,1,2]), 'large.txt':b'x'*100001, 'unicode.txt':'xin chào', 'dist/generated.js':'safe artifact', 'node_modules/pkg/index.js':'module.exports=1'}.items(): z.writestr(name,data)
+ for i in range(450): z.writestr(f'src/file{i:03}.ts', '// safe')`, zip], dir);
     const snapshot = { id: "snapshot", issueId: "issue", attachmentId: "attachment", repoUrl: null, issue: { title: "safe", description: "source" } };
     const updates: Array<Record<string, unknown>> = [];
     let inTransaction = false;
-    const db = { $queryRaw: async () => [{ id: snapshot.id }], sourceSnapshot: { updateMany: async () => ({ count: 0 }), findUniqueOrThrow: async () => snapshot, update: async ({ data }: { data: Record<string, unknown> }) => { updates.push(data); return snapshot; } }, attachment: { findFirst: async () => { expect(inTransaction).toBe(false); return ({ fileUrl: `/api/uploads?key=${path.basename(upload)}/source.zip`, sha256: createHash("sha256").update(await readFile(zip)).digest("hex") }); } } };
+    const db = { $queryRaw: async () => [{ id: snapshot.id }], sourceSnapshot: {
+      updateMany: async ({ data }: { data: Record<string, unknown> }) => {
+        if (data.status !== "READY") return { count: 0 };
+        updates.push(data);
+        return { count: 1 };
+      },
+      findUniqueOrThrow: async () => snapshot,
+      update: async ({ data }: { data: Record<string, unknown> }) => { updates.push(data); return snapshot; },
+    }, attachment: { findFirst: async () => { expect(inTransaction).toBe(false); return ({ fileUrl: `/api/uploads?key=${path.basename(upload)}/source.zip`, sha256: createHash("sha256").update(await readFile(zip)).digest("hex") }); } } };
     Object.assign(db, { $transaction: async (fn: (tx: typeof db) => unknown) => { inTransaction = true; try { return await fn(db); } finally { inTransaction = false; } } });
     await sourceSnapshotJob.run({ db, now: () => new Date(), config: { testRunnerEnabled: true, snapshotDir: dir } } as unknown as import("../src/runtime/scheduler").JobContext);
-    expect(updates[0]).toMatchObject({ status: "PROCESSING" });
+    expect(updates[0]).toMatchObject({ status: "PROCESSING", processingToken: expect.any(String) });
     const ready = updates.find((data) => data.status === "READY");
     expect(ready, JSON.stringify(updates)).toBeDefined();
+    expect(ready!.processingToken).toBeNull();
     const extracted = path.join(dir, "extracted"); await mkdir(extracted); await extractArchive(String(ready!.storagePath), extracted);
-    expect((await readdir(extracted)).sort()).toEqual([".env.example", "requirements.txt", "safe.py"]);
+    const tree = ready!.fileTree as Array<{ path: string; size: number }>;
+    expect(Array.isArray(tree)).toBe(true);
+    expect(tree).toHaveLength(456);
+    expect(tree.map((file) => file.path)).toEqual(tree.map((file) => file.path).sort());
+    for (const file of tree) {
+      expect(file).toEqual({ path: expect.any(String), size: expect.any(Number) });
+      expect((await readFile(path.join(extracted, file.path))).byteLength).toBe(file.size);
+    }
+    expect(tree).toContainEqual({ path: "src/file449.ts", size: 7 });
+    expect(tree).toContainEqual({ path: "image.bin", size: 3 });
+    expect(tree).toContainEqual({ path: "large.txt", size: 100001 });
+    expect(tree).toContainEqual({ path: "unicode.txt", size: Buffer.byteLength("xin chào") });
+    for (const excluded of [".env", "cert.pem", "binary.dat", "config.py", "dist/generated.js", "node_modules/pkg/index.js"]) {
+      expect(tree.some((file) => file.path === excluded)).toBe(false);
+    }
+    expect(await readdir(extracted)).not.toContain(".env");
     expect(ready!.context).not.toContain("hidden");
   } finally { await rm(dir, { recursive: true, force: true }); await rm(upload, { recursive: true, force: true }); }
 });
@@ -84,4 +109,52 @@ test("rejects a compressed ZIP containing 300 MB of zeros", async () => {
     expect((await command(["python3", "-c", 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w",compression=zipfile.ZIP_DEFLATED); z.writestr("zeros",bytes(300*1024*1024)); z.close()', zip], dir)).code).toBe(0);
     await expect(extractArchive(zip, work)).rejects.toThrow("Archive exceeds");
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test.each([true, false])("does not overwrite a replacement while finishing an old snapshot (valid upload: %s)", async (validUpload) => {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const { readFile, readdir } = await import("node:fs/promises");
+  const { sourceSnapshotJob } = await import("../src/jobs/source-snapshot");
+  const dir = await mkdtemp(path.join(tmpdir(), "br-replaced-source-"));
+  const upload = path.resolve(import.meta.dir, "../../web/.uploads", randomUUID());
+  try {
+    await mkdir(upload, { recursive: true });
+    const zip = path.join(upload, "source.zip");
+    const archive = await command(["python3", "-c", "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],'w'); z.writestr('requirements.txt','pytest'); z.close()", zip], dir);
+    expect(archive.code).toBe(0);
+    const snapshot: Record<string, unknown> = {
+      id: "snapshot", issueId: "issue", attachmentId: "original", status: "PENDING", processingToken: null,
+      issue: { title: "Bounty", description: "Source" },
+    };
+    const db = {
+      $queryRaw: async () => [{ id: snapshot.id }],
+      sourceSnapshot: {
+        updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+          if (Object.entries(where).some(([key, value]) => snapshot[key] !== value)) return { count: 0 };
+          Object.assign(snapshot, data);
+          return { count: 1 };
+        },
+        update: async ({ data }: { data: Record<string, unknown> }) => ({ ...Object.assign(snapshot, data) }),
+        findUniqueOrThrow: async () => ({ ...snapshot }),
+      },
+      attachment: {
+        findFirst: async () => {
+          // A new source replaced the old one and another worker has already claimed it.
+          Object.assign(snapshot, { attachmentId: "replacement", status: "PROCESSING", processingToken: "new-job" });
+          return validUpload ? {
+            fileUrl: `/api/uploads?key=${path.basename(upload)}/source.zip`,
+            sha256: createHash("sha256").update(await readFile(zip)).digest("hex"),
+          } : null;
+        },
+      },
+    };
+    Object.assign(db, { $transaction: async (fn: (tx: typeof db) => unknown) => fn(db) });
+    await sourceSnapshotJob.run({ db, now: () => new Date(), config: { testRunnerEnabled: true, snapshotDir: dir } } as unknown as import("../src/runtime/scheduler").JobContext);
+    expect(snapshot).toMatchObject({ attachmentId: "replacement", status: "PROCESSING", processingToken: "new-job" });
+    expect(snapshot.fileTree).toBeUndefined();
+    expect(await readdir(dir)).toEqual([]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(upload, { recursive: true, force: true });
+  }
 });

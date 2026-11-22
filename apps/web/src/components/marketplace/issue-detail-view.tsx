@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { issueStatus } from "@/lib/issue-status";
 import { canWriteIssueChat } from "@/lib/chat-access";
-import { ArrowLeft, Eye, MessageSquare, ShieldCheck, Users, ExternalLink, Clock } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, MessageSquare, ShieldCheck, Users, ExternalLink, Clock } from "lucide-react";
 import { graphqlRequest } from "@/lib/graphql-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/store/use-auth-store";
@@ -38,7 +38,7 @@ const ISSUE_QUERY = `
   query IssueDetail($id: ID!) {
     issue(id: $id) {
       id title description category status githubRepo bountyAmount { formatted raw decimals } requiredSkills difficulty timeEstimate
-      expiresAt viewCount applicationCount createdAt clientId developerId
+      expiresAt viewCount applicationCount createdAt clientId developerId noExecutableTests
       viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout }
       escrow { availableActions { action reasonDisabled } }
       token { symbol name }
@@ -106,7 +106,7 @@ type PreparedStep = { intentId: string; method: string; contractAddress: string;
 type ReservationRow = { id: string; status: string; chainId: number; contractAddress: string; tokenAddress: string; escrowKey: string; termsHash: string; amountRaw: string; deliveryDeadline: string; clientWallet: string; developerWallet: string };
 
 type ViewerCapabilities = { canApply?: boolean; canSelect: boolean; canFund: boolean; canSubmit: boolean; canRelease: boolean; canRequestChanges: boolean; canDispute: boolean; canProposeSettlement: boolean; canRevokeSettlement: boolean; canAcceptSettlement: boolean; canSubmitEvidence: boolean; canChallengeRuling: boolean; canFinalizeRuling: boolean; canFinalizeArbiterTimeoutSplit: boolean; canClaimMissedDeliveryRefund: boolean; canClaimReviewTimeout: boolean };
-type IssueDetail = IssueItem & { githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
+type IssueDetail = IssueItem & { noExecutableTests: boolean; githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
 type Application = { id: string; status: string; message?: string | null; createdAt: string; developer: IssueItem["client"] & { skills?: string[] } };
 
 type DetailResponse = { issue: (Omit<IssueDetail, "bountyAmount" | "bountyRaw" | "bountyDecimals"> & { bountyAmount: { formatted: string; raw: string; decimals: number } }) | null };
@@ -175,6 +175,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
       if (!isCurrent()) return;
       if (result.issue) {
         queryClient.setQueryData(["issue-detail", issueId, user?.id ?? null], result.issue);
+        setRequiresTests(!result.issue.noExecutableTests);
         setIssue({ ...result.issue, bountyAmount: Number(result.issue.bountyAmount.formatted), bountyRaw: result.issue.bountyAmount.raw, bountyDecimals: result.issue.bountyAmount.decimals });
       } else {
         setIssue(null);
@@ -187,11 +188,17 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     }
   }, [issueId, queryClient, user?.id, setError]);
 
+  const onExecutableChange = useCallback((hasTests: boolean) => {
+    setRequiresTests(hasTests);
+    void load();
+  }, [load]);
+
   useEffect(() => {
     const key = ["issue-detail", issueId, user?.id ?? null];
     const cached = queryClient.getQueryData<NonNullable<DetailResponse["issue"]>>(key);
     setError(null);
     if (cached) {
+      setRequiresTests(!cached.noExecutableTests);
       setIssue({ ...cached, bountyAmount: Number(cached.bountyAmount.formatted), bountyRaw: cached.bountyAmount.raw, bountyDecimals: cached.bountyAmount.decimals });
       setIsLoading(false);
     } else { setIssue(null); setIsLoading(true); }
@@ -587,6 +594,16 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
             </div>
           </div>
 
+          {issue.noExecutableTests === true && (
+            <aside role="alert" aria-label="Automated checks warning" style={{ display: "flex", gap: 12, padding: 18, borderRadius: 10, border: "1px solid var(--gold-line)", background: "var(--warn-bg)", color: "var(--warn)" }}>
+              <AlertTriangle aria-hidden="true" style={{ width: 24, height: 24, flexShrink: 0 }} />
+              <div>
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>This bounty has no automated checks.</p>
+                <p style={{ margin: "6px 0 0", fontSize: 13, lineHeight: 1.5 }}>No automated patch checks or secret screening are enforced for this bounty.</p>
+              </div>
+            </aside>
+          )}
+
           {/* Tabs */}
           <div className="tabs" role="tablist">
             <button
@@ -855,7 +872,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                   )}
 
                   <SourcePanel key={issue.id} issueId={issue.id} repository={issue.githubRepo ?? null} editable={isClient && issue.status === "OPEN"} />
-                  <TestCasePanel issueId={issue.id} owner={isClient} issueStatus={issue.status} onExecutableChange={setRequiresTests} />
+                  <TestCasePanel key={`criteria:${issue.id}`} issueId={issue.id} owner={isClient} issueStatus={issue.status} onExecutableChange={onExecutableChange} />
                   <IssueComments issueId={issue.id} ownerId={issue.clientId} />
                 </>
               )}

@@ -49,6 +49,7 @@ export function TestCasePanel({ issueId, owner, issueStatus, onExecutableChange 
 
   useEffect(() => {
     let active = true;
+    setLoading(true); setLoadFailed(false);
     void graphqlRequest<{ testCases: TestCase[] }>(TEST_CASES_QUERY, { issueId })
       .then((result) => { if (active) setTestCases(result.testCases); })
       .catch(() => { if (active) { setLoadFailed(true); setError("Could not load acceptance criteria. Please refresh and try again."); } })
@@ -56,7 +57,9 @@ export function TestCasePanel({ issueId, owner, issueStatus, onExecutableChange 
     return () => { active = false; };
   }, [issueId, owner, setError]);
 
-  useEffect(() => { onExecutableChange?.(testCases.some((c) => c.isApproved && Boolean(c.testCode))); }, [testCases, onExecutableChange]);
+  useEffect(() => {
+    if (!loading && !loadFailed) onExecutableChange?.(testCases.some((c) => c.isApproved && Boolean(c.testCode)));
+  }, [testCases, onExecutableChange, loading, loadFailed]);
   useEffect(() => {
     if (!testCases.some((c) => c.testCode && !c.baseStatus)) return;
     const timer = setInterval(() => { void graphqlRequest<{ testCases: TestCase[] }>(TEST_CASES_QUERY, { issueId }).then((r) => setTestCases(r.testCases)).catch(() => undefined); }, 5000);

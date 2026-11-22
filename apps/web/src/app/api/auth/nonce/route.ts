@@ -3,7 +3,7 @@ import { ACTIVE_CHAIN_ID } from "@bloody-roar/shared";
 import { thirdwebAuth } from "../../../../lib/auth";
 import { tryChecksumAddress } from "../../../../lib/auth/address";
 import { prisma } from "@bloody-roar/database";
-import { authDomain } from "../../../../lib/auth/siwe";
+import { authDomain, authUri } from "../../../../lib/auth/siwe";
 import { buildChallengeIdentity } from "../../../../lib/auth/challenge";
 import { createLogger } from "../../../../lib/logger";
 import { clientIp, rateLimit, tooManyRequests } from "../../../../lib/rate-limit";
@@ -28,7 +28,7 @@ export async function GET(req: Request) {
       return tooManyRequests(Math.max(ipLimit.retryAfterMs, addressLimit.retryAfterMs));
     }
     const auth = thirdwebAuth();
-    const uri = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:4000";
+    const uri = authUri();
     const chainId = String(ACTIVE_CHAIN_ID);
     const expirationTime = new Date(Date.now() + 10 * 60 * 1000);
     const payload = await auth.payload({

@@ -17,14 +17,21 @@ import { startEscrowBridge } from "./src/lib/realtime/escrow-bridge";
 import { logger } from "./src/lib/logger";
 import { assertChainConfig, defaultLocalManifestPath } from "@bloody-roar/shared/chain-guard";
 import { tokenFromCookieHeader, verifyJWT } from "./src/lib/auth";
+import { authUri } from "./src/lib/auth/siwe";
 
 const dev = process.env.NODE_ENV !== "production";
 // Containers (Railway/Docker) set HOSTNAME to the container id, so never use it to bind.
 const hostname = process.env.BIND_HOST || (dev ? "localhost" : "0.0.0.0");
-const port = Number.parseInt(process.env.PORT || "4000", 10);
-const appUrl = dev
-  ? `http://localhost:${port}`
-  : process.env.NEXT_PUBLIC_APP_URL ?? `http://${hostname}:${port}`;
+
+const defaultPort = process.argv.includes("--local") ? 4010 : 4000;
+const port = Number(process.env.PORT || defaultPort);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("PORT must be an integer between 1 and 65535");
+}
+
+const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${port}`;
+const appUrl = authUri(configuredAppUrl);
+process.env.NEXT_PUBLIC_APP_URL = configuredAppUrl;
 
 // Initialize Next.js
 const app = next({ dev, hostname, port });
@@ -79,7 +86,7 @@ app.prepare().then(async () => {
   // Attach Socket.io to the HTTP server
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: dev ? [appUrl, `http://127.0.0.1:${port}`] : [appUrl],
+      origin: dev ? [appUrl, `http://localhost:${port}`, `http://127.0.0.1:${port}`] : [appUrl],
       credentials: true,
     },
     transports: ["websocket", "polling"],

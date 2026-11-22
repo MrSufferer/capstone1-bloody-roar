@@ -94,6 +94,10 @@ builder.mutationField("createSubmissionDraft", (t) => t.field({
         manifest, deliveryHash: computeDeliveryHash(manifest), status: SubmissionStatus.DRAFT };
       const include = SUBMISSION_INCLUDE;
       if (existing && !prepared) return tx.submission.update({ where: { id }, data, include });
+      await tx.submission.updateMany({
+        where: { issueId: issue.id, developerId: user.id, status: SubmissionStatus.DRAFT },
+        data: { status: SubmissionStatus.SUPERSEDED, supersededAt: new Date() },
+      });
       return tx.submission.create({ data: { ...data, id, issueId: issue.id, developerId: user.id }, include });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   },

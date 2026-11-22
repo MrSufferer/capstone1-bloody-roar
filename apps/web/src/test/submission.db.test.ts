@@ -46,6 +46,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("Submission on the test database
     const next = changed.data?.createSubmissionDraft as { id: string; deliveryHash: string };
     expect(next.id).not.toBe(initial.id); expect(next.deliveryHash).not.toBe(initial.deliveryHash);
     const original = await prisma.submission.findUniqueOrThrow({ where: { id: initial.id } });
+    expect(original.status).toBe("SUPERSEDED");
+    expect(original.supersededAt).toBeInstanceOf(Date);
+    expect(await prisma.submission.count({ where: { issueId, developerId: developer.id, status: "DRAFT" } })).toBe(1);
     expect(original.deliveryHash).toBe(initial.deliveryHash);
     expect(computeDeliveryHash(original.manifest as DeliveryManifest)).toBe(initial.deliveryHash);
     const denied = await execute(`query($id: String!) { submissions(issueId: $id) { id } }`, { user: outsider, db: prisma }, { id: issueId });
@@ -85,5 +88,39 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("Submission on the test database
     expect(row.description).not.toContain(key);
     const manifest = row.manifest as { descriptionSha256: string };
     expect(manifest.descriptionSha256).toBe(createHash("sha256").update(row.description ?? "", "utf8").digest("hex"));
+  });
+  it("keeps only the latest draft when submissionId is omitted", async () => {
+    const first = await execute(CREATE, { user: developer, db: prisma }, { issue: issueId, text: "draft without id A" });
+    const second = await execute(CREATE, { user: developer, db: prisma }, { issue: issueId, text: "draft without id B" });
+    expect(first.errors).toBeUndefined();
+    expect(second.errors).toBeUndefined();
+    const firstId = (first.data?.createSubmissionDraft as { id: string }).id;
+    const secondId = (second.data?.createSubmissionDraft as { id: string }).id;
+    const old = await prisma.submission.findUniqueOrThrow({ where: { id: firstId } });
+    expect(old.status).toBe("SUPERSEDED");
+    expect(old.supersededAt).toBeInstanceOf(Date);
+    expect(await prisma.submission.findMany({ where: { issueId, developerId: developer.id, status: "DRAFT" }, select: { id: true } }))
+      .toEqual([{ id: secondId }]);
+  });
+
+  it("rolls back superseding earlier drafts if creating the replacement fails", async () => {
+    const created = await execute(CREATE, { user: developer, db: prisma }, { issue: issueId, text: "rollback original" });
+    expect(created.errors).toBeUndefined();
+    const id = (created.data?.createSubmissionDraft as { id: string }).id;
+    const original = await prisma.submission.findUniqueOrThrow({ where: { id } });
+    const failingDb = prisma.$extends({ query: { submission: { create() { throw new Error("Replacement creation failed"); } } } });
+    const failed = await execute(CREATE, { user: developer, db: failingDb }, { issue: issueId, text: "replacement must fail" });
+    expect(failed.errors).toBeDefined();
+    expect(await prisma.submission.findUniqueOrThrow({ where: { id } })).toEqual(original);
+    expect(await prisma.submission.count({ where: { issueId, developerId: developer.id, status: "DRAFT" } })).toBe(1);
+  });
+
+  it("never leaves two drafts after concurrent new-draft requests", async () => {
+    const results = await Promise.all([
+      execute(CREATE, { user: developer, db: prisma }, { issue: issueId, text: "concurrent draft A" }),
+      execute(CREATE, { user: developer, db: prisma }, { issue: issueId, text: "concurrent draft B" }),
+    ]);
+    expect(results.some((result) => !result.errors)).toBe(true);
+    expect(await prisma.submission.count({ where: { issueId, developerId: developer.id, status: "DRAFT" } })).toBe(1);
   });
 });
