@@ -42,7 +42,9 @@ export function createLoginMessage(payload: SiweLoginPayload): string {
 }
 
 export function authUri(rawUrl?: string): string {
-  const target = rawUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:4000";
+  // Read the runtime URL set by the custom server before Next.js starts.
+  const { NEXT_PUBLIC_APP_URL } = process.env;
+  const target = rawUrl ?? NEXT_PUBLIC_APP_URL ?? "http://localhost:4000";
   try {
     const parsed = new URL(target);
     if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Invalid protocol");

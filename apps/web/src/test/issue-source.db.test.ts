@@ -44,10 +44,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("Source inventory on the test da
     }
   });
 
-  it("clears the previous inventory to SQL NULL when replacing the source", async () => {
+  it("clears the previous inventory and invalidates the running worker when replacing the source", async () => {
+    await prisma.sourceSnapshot.update({ where: { issueId }, data: { status: "PROCESSING", processingToken: "old-job" } });
     const result = await execute(`mutation($id: ID!) { setIssueSource(issueId: $id, repoUrl: "https://github.com/example/project") { status fileTree { path size } } }`, { user: owner, db: prisma }, { id: issueId });
     expect(result.errors).toBeUndefined();
     expect(result.data?.setIssueSource).toEqual({ status: "PENDING", fileTree: null });
     expect(await prisma.$queryRaw`SELECT "fileTree" IS NULL AS empty FROM source_snapshots WHERE "issueId" = ${issueId}`).toEqual([{ empty: true }]);
+    expect(await prisma.sourceSnapshot.findUnique({ where: { issueId } })).toMatchObject({ processingToken: null });
   });
 });

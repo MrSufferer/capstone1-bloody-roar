@@ -43,16 +43,18 @@ export const sourceSnapshotJob: Job = {
   async run({ db, config, now }) {
     if (!config.testRunnerEnabled) return;
     const stale = { status: "PROCESSING" as const, updatedAt: { lt: new Date(now().getTime() - 20 * 60_000) } };
-    const failed = await db.sourceSnapshot.updateMany({ where: { ...stale, attempts: { gte: 2 } }, data: { status: "FAILED", error: "worker lost" } });
-    const recovered = await db.sourceSnapshot.updateMany({ where: { ...stale, attempts: { lt: 2 } }, data: { status: "PENDING", attempts: { increment: 1 } } });
+    const failed = await db.sourceSnapshot.updateMany({ where: { ...stale, attempts: { gte: 2 } }, data: { status: "FAILED", processingToken: null, error: "worker lost" } });
+    const recovered = await db.sourceSnapshot.updateMany({ where: { ...stale, attempts: { lt: 2 } }, data: { status: "PENDING", processingToken: null, attempts: { increment: 1 } } });
     if (failed.count || recovered.count) return;
+    const processingToken = randomUUID();
     const snapshot = await db.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM source_snapshots WHERE status = 'PENDING' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1`;
       if (!rows[0]) return null;
-      await tx.sourceSnapshot.update({ where: { id: rows[0].id }, data: { status: "PROCESSING" } });
+      await tx.sourceSnapshot.update({ where: { id: rows[0].id }, data: { status: "PROCESSING", processingToken } });
       return tx.sourceSnapshot.findUniqueOrThrow({ where: { id: rows[0].id }, include: { issue: { select: { title: true, description: true } } } });
     });
     if (!snapshot) return;
+    const currentJob = { id: snapshot.id, status: "PROCESSING" as const, processingToken };
     const temp = await mkdtemp(path.join(tmpdir(), "br-source-")), work = path.join(temp, "work"), archive = path.join(temp, "source.tar.gz");
     const deadline = Date.now() + 120_000;
     const run = async (args: string[], cwd = temp) => { const result = await command(args, cwd, Math.max(1, deadline - Date.now())); if (result.code) throw new Error(result.log || "Source command failed"); return result.log.trim(); };
@@ -84,8 +86,18 @@ export const sourceSnapshotJob: Job = {
       await mkdir(config.snapshotDir, { recursive: true });
       const bytes = await readFile(archive), storagePath = path.join(config.snapshotDir, `${randomUUID()}.tar.gz`);
       await writeFile(storagePath, bytes);
-      await db.$transaction((tx) => tx.sourceSnapshot.update({ where: { id: snapshot.id }, data: { ...detected, fileTree, commitSha, storagePath, sha256: createHash("sha256").update(bytes).digest("hex"), context: sourceContext(files, `${snapshot.issue.title} ${snapshot.issue.description}`), status: "READY", error: null } }));
-    } catch (error) { await db.$transaction((tx) => tx.sourceSnapshot.update({ where: { id: snapshot.id }, data: { status: "FAILED", error: String(error instanceof Error ? error.message : error).slice(0, 500) } })); }
+      const saved = await db.sourceSnapshot.updateMany({
+        where: currentJob,
+        data: { ...detected, fileTree, commitSha, storagePath, sha256: createHash("sha256").update(bytes).digest("hex"),
+          context: sourceContext(files, `${snapshot.issue.title} ${snapshot.issue.description}`), status: "READY", processingToken: null, error: null },
+      });
+      if (!saved.count) await rm(storagePath, { force: true });
+    } catch (error) {
+      await db.sourceSnapshot.updateMany({
+        where: currentJob,
+        data: { status: "FAILED", processingToken: null, error: String(error instanceof Error ? error.message : error).slice(0, 500) },
+      });
+    }
     finally { await rm(temp, { recursive: true, force: true }); }
   },
 };

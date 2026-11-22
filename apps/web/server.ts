@@ -17,27 +17,21 @@ import { startEscrowBridge } from "./src/lib/realtime/escrow-bridge";
 import { logger } from "./src/lib/logger";
 import { assertChainConfig, defaultLocalManifestPath } from "@bloody-roar/shared/chain-guard";
 import { tokenFromCookieHeader, verifyJWT } from "./src/lib/auth";
+import { authUri } from "./src/lib/auth/siwe";
 
 const dev = process.env.NODE_ENV !== "production";
 // Containers (Railway/Docker) set HOSTNAME to the container id, so never use it to bind.
 const hostname = process.env.BIND_HOST || (dev ? "localhost" : "0.0.0.0");
 
-// Safe port parsing: handles Windows where bash syntax like ${PORT:-4000} is passed literally
-const parsePort = (val: string | undefined, fallback = 4000): number => {
-  if (!val) return fallback;
-  const num = Number.parseInt(val, 10);
-  if (!Number.isNaN(num)) return num;
-  const cleaned = Number.parseInt(val.replace(/[^0-9]/g, ""), 10);
-  return Number.isNaN(cleaned) ? fallback : cleaned;
-};
-const port = parsePort(process.env.PORT, 4000);
+const defaultPort = process.argv.includes("--local") ? 4010 : 4000;
+const port = Number(process.env.PORT || defaultPort);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("PORT must be an integer between 1 and 65535");
+}
 
-const rawAppUrl = process.env.NEXT_PUBLIC_APP_URL;
-const appUrl = dev
-  ? `http://localhost:${port}`
-  : rawAppUrl && !rawAppUrl.includes("${")
-    ? rawAppUrl
-    : `http://${hostname}:${port}`;
+const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${port}`;
+const appUrl = authUri(configuredAppUrl);
+process.env.NEXT_PUBLIC_APP_URL = configuredAppUrl;
 
 // Initialize Next.js
 const app = next({ dev, hostname, port });
@@ -92,7 +86,7 @@ app.prepare().then(async () => {
   // Attach Socket.io to the HTTP server
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: dev ? [appUrl, `http://127.0.0.1:${port}`] : [appUrl],
+      origin: dev ? [appUrl, `http://localhost:${port}`, `http://127.0.0.1:${port}`] : [appUrl],
       credentials: true,
     },
     transports: ["websocket", "polling"],

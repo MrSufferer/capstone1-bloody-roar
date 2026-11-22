@@ -54,7 +54,7 @@ builder.mutationField("setIssueSource", (t) => t.prismaField({
       await tx.testCase.updateMany({ where: { issueId, isApproved: false }, data: { testCode: null, baseStatus: null } });
       await tx.testRun.updateMany({ where: { issueId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "ERROR", log: "Source changed", finishedAt: new Date() } });
       await tx.issue.update({ where: { id: issueId }, data: { termsVersion: { increment: 1 } } });
-      const data = { repoUrl: input.repoUrl ?? null, ref: input.ref ?? null, attachmentId: input.attachmentId ?? null, commitSha: null, storagePath: null, sha256: null, context: null, fileTree: Prisma.DbNull, error: null, attempts: 0, framework: null, installCommand: null, status: "PENDING" as const };
+      const data = { repoUrl: input.repoUrl ?? null, ref: input.ref ?? null, attachmentId: input.attachmentId ?? null, commitSha: null, storagePath: null, sha256: null, context: null, fileTree: Prisma.DbNull, error: null, attempts: 0, framework: null, installCommand: null, status: "PENDING" as const, processingToken: null };
       return tx.sourceSnapshot.upsert({ ...query, where: { issueId }, create: { issueId, ...data }, update: data });
     });
   },
