@@ -1095,7 +1095,7 @@ async function run() {
     check("S9", "Guest prepareClaim rejected with UNAUTHORIZED", guestCall.errors?.[0]?.extensions?.code === "UNAUTHORIZED");
 
     // 2. Outsider cannot prepareReleaseFunds on someone else's issue
-    const outRel = await gql(outsider.cookie, `mutation { prepareReleaseFunds(issueId: "nonexistent") { intentId } }`);
+    const outRel = await gql(outsider.cookie, `mutation { prepareReleaseFunds(issueId: "nonexistent", deliveryHash: "0x00") { intentId } }`);
     check("S9", "Outsider prepareReleaseFunds rejected", outRel.errors?.[0]?.extensions?.code === "NOT_FOUND" || outRel.errors?.[0]?.extensions?.code === "FORBIDDEN");
 
     // 3. Admin cannot create issue
