@@ -17,6 +17,7 @@ function setup(options: { applicationStatus: string; reservationStatus: string; 
   const application = { id: "application", status: options.applicationStatus };
   const notifications: { userId: string; type: string; title: string; body: string; data: Record<string, string> }[] = [];
   const projections: unknown[] = [];
+  const calls: string[] = [];
   const tx = {
     fundingReservation: {
       findUnique: async () => reservation,
@@ -40,7 +41,10 @@ function setup(options: { applicationStatus: string; reservationStatus: string; 
     },
     application: {
       findUnique: async () => application,
-      findUniqueOrThrow: async () => application,
+      findUniqueOrThrow: async () => {
+        calls.push("application.read");
+        return application;
+      },
       findMany: async () => [],
       update: async ({ data }: { data: Record<string, unknown> }) => Object.assign(application, data),
       updateMany: async () => ({ count: 0 }),
@@ -55,13 +59,17 @@ function setup(options: { applicationStatus: string; reservationStatus: string; 
       findUniqueOrThrow: async () => ({ id: `notification-${notifications.length}` }),
     },
     $executeRaw: async () => 1,
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      if (strings.join("?").includes("FOR UPDATE")) calls.push("issue.lock");
+      return [];
+    },
   };
   const meta: EffectMeta = { chainId: 31337, contractAddress: address("1"), chainEventId: "event", escrowIdHash: hash("2"),
     blockNumber: 1n, blockHash: hash("3"), txHash: hash("4"), txIndex: 0, logIndex: 0, blockTimestamp: 1_800_000_000n };
   const effect = { kind: "FUNDED" as const, escrowIdHash: hash("2"), client: address("a"), developer: address("b"),
     arbiter: address("c"), feeRecipient: address("d"), amount: 100n, deliveryDeadline: deadline, termsHash: hash("7") };
   const run = () => applyFunded(tx as unknown as Prisma.TransactionClient, effect as never, meta);
-  return { run, reservation, issue, application, notifications, projections };
+  return { run, reservation, issue, application, notifications, projections, calls };
 }
 
 test("a deposit for a withdrawn application is a mismatch and keeps the application withdrawn", async () => {
@@ -108,4 +116,10 @@ test("deposit notifications are written in English", async () => {
     title: "Deposit confirmed",
     body: "The deposit for “Bounty” was recorded on-chain.",
   });
+});
+
+test("locks the issue row before reading the application so a concurrent withdraw cannot be revived", async () => {
+  const state = setup({ applicationStatus: "PENDING", reservationStatus: "EXPIRED", issueStatus: "OPEN" });
+  await state.run();
+  expect(state.calls).toEqual(["issue.lock", "application.read"]);
 });
