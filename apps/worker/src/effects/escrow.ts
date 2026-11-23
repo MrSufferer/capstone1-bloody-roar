@@ -62,6 +62,7 @@ export async function applyFunded(
     throw new Error("Deposit contract or chain does not match the reservation");
   }
   if (reservation.status === ReservationStatus.FUNDED) return;
+  await tx.$queryRaw`SELECT id FROM issues WHERE id = ${reservation.issueId} FOR UPDATE`;
 
   const issue = await tx.issue.findUniqueOrThrow({
     where: { id: reservation.issueId },
