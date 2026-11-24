@@ -64,7 +64,7 @@ Quy tắc theo `lib/escrow/access.ts` và `lib/escrow/confirmation.ts`. Phần n
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `depositToEscrow` | đã gỡ (nạp qua `prepareEscrowDeposit`) | | | | | | | |
 | `releaseFunds` | đã gỡ (thay bằng `prepareReleaseFunds`) | | | | | | | |
-| `prepareReleaseFunds` | UNAUTHORIZED | NOT_FOUND | — | — | — | UNAUTHORIZED | Thay `releaseFunds`. Chưa có escrow thì `NOT_FOUND`. `deliveryHash` khác bản giao mới nhất thì `DELIVERY_CHANGED`. Các ô còn lại chưa kiểm. |
+| `prepareReleaseFunds` | UNAUTHORIZED | NOT_FOUND | — | — | — | UNAUTHORIZED | Thay `releaseFunds`. Chưa có escrow thì `NOT_FOUND`. Các ô còn lại chưa kiểm. |
 | `confirmEscrowTransaction` | đã gỡ (tách thành các mutation `prepare*`) | | | | | | | |
 | `cancelEscrow` | đã gỡ khỏi schema | | | | | | | |
 
