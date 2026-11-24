@@ -97,8 +97,19 @@ export async function applyFunded(
     await acceptDeposit(tx, reservation, effect, meta, issue.title, issue.status);
     return;
   }
-  await markMismatch(tx, reservation, issue, reasons, meta, late);
+  await markMismatch(tx, reservation, issue, reasons.length ? reasons : ["late"], meta, late);
 }
+
+const mismatchReasonText: Record<string, string> = {
+  client: "the client wallet differs",
+  developer: "the developer wallet differs",
+  amount: "the amount differs",
+  deadline: "the delivery deadline differs",
+  termsHash: "the terms hash differs",
+  token: "the token differs",
+  application: "the Application is no longer pending",
+  late: "it arrived after the reservation expired and the Issue is no longer open",
+};
 
 async function acceptDeposit(
   tx: Prisma.TransactionClient,
@@ -221,7 +232,7 @@ async function markMismatch(
     {
       type: "DEPOSIT_MISMATCHED",
       title: "Deposit does not match the terms",
-      body: `The deposit for “${issue.title}” differs from the selected terms. Manual review is required.`,
+      body: `The deposit for “${issue.title}” does not match: ${reasons.map((reason) => mismatchReasonText[reason] ?? reason).join("; ")}. Manual review is required.`,
       link: `/issues/${reservation.issueId}`,
       data: {
         issueId: reservation.issueId,
