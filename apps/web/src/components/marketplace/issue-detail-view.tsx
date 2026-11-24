@@ -344,11 +344,11 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     finally { setIsWorking(false); }
   };
 
-  const reviewDelivery = async (submissionId: string, approved: boolean, deliveryHash?: string | null) => {
+  const reviewDelivery = async (submissionId: string, approved: boolean, deliveryHash?: string) => {
     setIsWorking(true); setError(null); setNotice(null);
     try {
       if (approved) {
-        const prepared = await graphqlRequest<{ prepareReleaseFunds: PreparedStep }>(PREPARE_RELEASE, { id: issueId, deliveryHash: deliveryHash ?? "" });
+        const prepared = await graphqlRequest<{ prepareReleaseFunds: PreparedStep }>(PREPARE_RELEASE, { id: issueId, deliveryHash });
         await sendPreparedCalls([prepared.prepareReleaseFunds], recordTx, user!.walletAddress);
         setNotice("Escrow released on-chain. The developer can claim the payout.");
         awaitChain();
@@ -1036,9 +1036,9 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                                   <button
                                     type="button"
                                     className="btn btn-ok btn-sm"
-                                    disabled={isWorking || !actionEnabled("releaseFunds")}
+                                    disabled={isWorking || !actionEnabled("releaseFunds") || !sub.deliveryHash}
                                     title={actionOf("releaseFunds")?.reasonDisabled ?? undefined}
-                                    onClick={() => void reviewDelivery(sub.id, true, sub.deliveryHash)}
+                                    onClick={() => { if (sub.deliveryHash) void reviewDelivery(sub.id, true, sub.deliveryHash); }}
                                   >
                                     Approve delivery
                                   </button>
