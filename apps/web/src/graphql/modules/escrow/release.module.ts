@@ -76,7 +76,7 @@ builder.mutationField("prepareReleaseFunds", (t) =>
       if (!projection.deliveryHash)
         throw gqlError("No delivery on-chain yet", "NO_DELIVERY");
       if (args.deliveryHash.toLowerCase() !== projection.deliveryHash.toLowerCase())
-        throw gqlError("A newer delivery was submitted. Refresh and review it before releasing", "DELIVERY_CHANGED");
+        throw gqlError("A newer Submission was made. Refresh and review it before releasing", "DELIVERY_CHANGED");
       return createPreparedCall(ctx.db, {
         userId: user.id,
         method: "releaseFunds",
