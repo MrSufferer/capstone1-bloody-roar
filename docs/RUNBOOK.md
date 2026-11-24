@@ -43,43 +43,23 @@ Lệnh đặt role `ADMIN` và ghi một dòng `AdminLog` (action `grant_admin`,
 
 ## Auto-claim
 
-Auto-claim is off in release (MVP) builds. Release builds leave
-`RELAYER_PRIVATE_KEY` empty, and with no key the worker starts normally and skips
-the job. Withdraw on the dashboard is the only claim path.
+Worker dùng `RELAYER_PRIVATE_KEY` để trả gas cho `claim(recipient)`. Ví nhận tiền
+vẫn là client/developer, không phải relayer. Không có key thì job tắt. Chỉ nạp ETH
+gas vào relayer; không dùng ví client, developer hoặc fee recipient.
 
-When the key is set, the worker uses it to pay gas for `claim(recipient)`. Funds
-still go to the client or developer wallet, never to the relayer. The relayer
-holds ETH for gas only; never use a client, developer or fee recipient wallet.
+Job chạy mỗi 15 giây, tối đa 10 ví/tick, chỉ lấy ví user đã đăng ký và đúng
+chain/contract, bỏ fee recipient. Mỗi lần thử cách nhau ít nhất 10 phút, kể cả
+gửi lỗi hoặc projection còn chậm. Indexer xác nhận event `Claimed` rồi đưa số dư
+về 0. Dashboard hiện pending nhưng giữ Withdraw làm dự phòng.
 
-The job runs every 15 seconds and handles at most 10 wallets per tick. It only
-picks registered user wallets on the configured chain and contract, and skips the
-fee recipient. Attempts for a wallet are at least 10 minutes apart, including
-after a send error or a lagging projection. The indexer confirms the `Claimed`
-event and sets the balance to 0. The dashboard shows "pending" but keeps Withdraw
-as a fallback.
+`RELAYER_MIN_GAS_WEI=1000000000000000` là ngưỡng mặc định. Alert
+`RELAYER_LOW_GAS` chỉ phát một lần cho đến khi số dư phục hồi. Theo dõi alert và
+log job, nạp ETH nếu thấp hơn ngưỡng; không đổi khóa chỉ để xử lý thiếu gas.
 
-### Enable it locally
-
-1. Start a local chain (Hardhat) and the database used by the worker.
-2. Create a fresh throwaway key for the relayer only. Never reuse a real wallet.
-3. In your local env file (not `.env.example`, never committed), set
-   `RELAYER_PRIVATE_KEY` to that key (`0x` plus 64 hex chars) and optionally
-   `RELAYER_MIN_GAS_WEI` (default `1000000000000000`, 0.001 ETH).
-4. Fund the relayer address with local ETH for gas.
-5. Start the worker and check its log for the auto-claim job.
-6. To turn it off again, clear `RELAYER_PRIVATE_KEY` and restart the worker.
-
-The `RELAYER_LOW_GAS` alert fires once when the relayer balance drops below
-`RELAYER_MIN_GAS_WEI` and stays quiet until the balance recovers. Top up ETH
-when it fires; don't rotate the key just to fix low gas.
-
-Checks: `bun run --cwd apps/worker test reconciliation.test.ts` confirms the
-worker starts with an empty key. The end-to-end scenario
-`tests/e2e/e33-auto-claim.test.ts` (run by `bun run test:e2e:backend`, last
-verified 2026-11-10) creates an issue, funds, submits and releases it, then has
-the relayer claim. It confirms the event, that USDC rises by the claimable amount,
-and that the projection returns to 0 within a minute. It uses its own Hardhat
-node, database and relayer funded over local RPC.
+Kiểm chứng ngày 2026-11-10: `bun run test:e2e:backend`, scenario
+`tests/e2e/e33-auto-claim.test.ts`. Tạo issue → fund → submit → release → relayer
+claim; xác nhận event, USDC tăng đúng số claimable và projection về 0 trong dưới
+một phút. Test dùng Hardhat/DB riêng, relayer riêng được cấp gas bằng RPC local.
 
 ## Test runner và migration chat
 
