@@ -103,12 +103,32 @@ test("a matching deposit for a pending application is accepted", async () => {
   expect(state.notifications.map((n) => n.type)).toEqual(["DEPOSIT_CONFIRMED", "APPLICATION_ACCEPTED", "TASK_ASSIGNED"]);
 });
 
+test("a late deposit while another reservation holds the issue names the late reason", async () => {
+  const state = setup({ applicationStatus: "PENDING", reservationStatus: "EXPIRED", issueStatus: "AWAITING_FUNDING" });
+  await state.run();
+  expect(state.reservation.status).toBe("MISMATCHED");
+  expect(state.notifications[0].data.reasons).toBe("late");
+  expect(state.notifications[0].body).toBe(
+    "The deposit for “Bounty” does not match: it arrived after the reservation expired and the Issue is no longer open. Manual review is required.",
+  );
+});
+
+test("mismatch notifications name every reason", async () => {
+  const state = setup({ applicationStatus: "WITHDRAWN", reservationStatus: "AWAITING_FUNDING", issueStatus: "AWAITING_FUNDING" });
+  state.reservation.termsHash = hash("8");
+  await state.run();
+  expect(state.notifications[0].data.reasons).toBe("termsHash,application");
+  expect(state.notifications[0].body).toBe(
+    "The deposit for “Bounty” does not match: the terms hash differs; the Application is no longer pending. Manual review is required.",
+  );
+});
+
 test("deposit notifications are written in English", async () => {
   const mismatch = setup({ applicationStatus: "WITHDRAWN", reservationStatus: "AWAITING_FUNDING", issueStatus: "AWAITING_FUNDING" });
   await mismatch.run();
   expect(mismatch.notifications[0]).toMatchObject({
     title: "Deposit does not match the terms",
-    body: "The deposit for “Bounty” differs from the selected terms. Manual review is required.",
+    body: "The deposit for “Bounty” does not match: the Application is no longer pending. Manual review is required.",
   });
   const accepted = setup({ applicationStatus: "PENDING", reservationStatus: "AWAITING_FUNDING", issueStatus: "AWAITING_FUNDING" });
   await accepted.run();
