@@ -102,6 +102,20 @@ export const ALLOWED_FILE_TYPES = [
   "text/css",
 ] as const;
 
+export const CHAT_FILE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/x-diff",
+  "text/x-patch",
+  "application/json",
+] as const;
+export const CHAT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
 // =============================================================================
 // AI GUARD
 // =============================================================================

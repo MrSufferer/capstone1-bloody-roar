@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { NextResponse } from "next/server";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { prisma } from "@bloody-roar/database";
+import { CHAT_FILE_TYPES, CHAT_MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
 import { tokenFromRequest, verifyJWT } from "@/lib/auth";
 import { getS3Storage, localUploadPath } from "@/lib/storage";
 
@@ -50,6 +51,20 @@ export async function POST(request: Request) {
   // A short or oversized file keeps the attachment PENDING so the client can upload it again.
   if (bytes.byteLength !== attachment.fileSize)
     return NextResponse.json({ error: "Stored file size does not match the declared size" }, { status: 400 });
+
+  const chatRejection =
+    attachment.purpose !== "CHAT" ? null
+    : !CHAT_FILE_TYPES.includes(attachment.fileMime as never) ? { error: "This file type can't be sent in chat", code: "FILE_TYPE_NOT_ALLOWED" }
+    : bytes.byteLength > CHAT_MAX_FILE_SIZE_BYTES ? { error: "Chat files must be 10 MB or smaller", code: "FILE_TOO_LARGE" }
+    : null;
+  if (chatRejection) {
+    const s3 = getS3Storage();
+    const localPath = localUploadPath(key);
+    if (s3) await s3.client.send(new DeleteObjectCommand({ Bucket: s3.bucket, Key: key }));
+    else if (localPath) await unlink(localPath.destination).catch(() => undefined);
+    await prisma.attachment.update({ where: { id: attachment.id }, data: { status: "REJECTED" } });
+    return NextResponse.json(chatRejection, { status: 422 });
+  }
 
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   await prisma.$transaction([
