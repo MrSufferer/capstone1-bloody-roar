@@ -20,8 +20,11 @@ const person = (id: string) => ({ id, name: id, walletAddress: "0x11111111111111
 const criterion = { id: "case", title: "Addition works", description: "Verify addition", given: "two numbers", when: "adding", bddThen: "returns sum", isEdgeCase: false, priority: "NORMAL", isApproved: false, testCode: "test()", testFilePath: "__bloodyroar__/sum.test.ts", baseStatus: "passed", expectBaseFail: false };
 let noChecks: boolean;
 let cases: Array<typeof criterion>;
+function renderIssue(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  return render(<QueryClientProvider client={queryClient}><IssueDetailView issueId="issue" /></QueryClientProvider>);
+}
 async function showIssue() {
-  await act(async () => { render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><IssueDetailView issueId="issue" /></QueryClientProvider>); });
+  await act(async () => { renderIssue(); });
 }
 
 beforeEach(() => {
@@ -54,7 +57,7 @@ describe("automated checks warning on the issue page", () => {
     await showIssue();
     expect(await screen.findByText(headline)).toBeInTheDocument();
     expect(screen.getByText(explanation)).toBeInTheDocument();
-    expect(request).toHaveBeenCalledWith(expect.stringContaining("noExecutableTests"), { id: "issue", initial: true });
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("noExecutableTests"), { id: "issue", initial: true, includeApplications: true });
     await act(async () => { fireEvent.click(screen.getByRole("tab", { name: /delivery/i })); });
     expect(screen.getByText(headline)).toBeInTheDocument();
   });
@@ -86,8 +89,31 @@ describe("automated checks warning on the issue page", () => {
     expect(await screen.findByText(headline)).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Approve" })); });
     await waitFor(() => expect(screen.queryByText(headline)).not.toBeInTheDocument());
-    expect(request.mock.calls.filter(([query]) => String(query).includes("query IssueDetail")).length).toBeGreaterThan(1);
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("query IssueDetail"), { id: "issue", initial: false, includeApplications: false });
   });
+
+  it("keeps cached applicants visible after an overview-only refresh", async () => {
+    cases = [criterion];
+    let deferInitialLoad = false;
+    const handler = request.getMockImplementation()!;
+    request.mockImplementation(async (query: string, variables?: { initial?: boolean; includeApplications?: boolean }) => {
+      if (query.includes("query IssueDetail") && variables?.initial && deferInitialLoad) return new Promise(() => undefined);
+      const result = await handler(query);
+      if (!query.includes("query IssueDetail") || !variables?.includeApplications) return result;
+      return { issue: { ...result.issue, ownerApplications: [{ id: "app", status: "PENDING", message: "Applicant cover note", developer: person("developer") }] } };
+    });
+    const queryClient = new QueryClient();
+    const view = renderIssue(queryClient);
+    expect(await screen.findByText("Applicant cover note")).toBeInTheDocument();
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await act(async () => { fireEvent.click(approve); });
+    await waitFor(() => expect(screen.queryByText(headline)).not.toBeInTheDocument());
+    view.unmount();
+    deferInitialLoad = true;
+    await act(async () => { renderIssue(queryClient); });
+    expect(screen.getByText("Applicant cover note")).toBeInTheDocument();
+  });
+
   it("shows the warning again after deleting the last approved executable check", async () => {
     noChecks = false; cases = [{ ...criterion, isApproved: true }];
     await showIssue();

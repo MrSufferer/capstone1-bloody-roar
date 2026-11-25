@@ -38,18 +38,18 @@ const defaultDeliveryDeadline = () => new Date(Date.now() + 7 * 86_400_000).toIS
 const UNREAD_QUERY = `query UnreadMessages($issueId: String!) { unreadMessageCount(issueId: $issueId) }`;
 
 const ISSUE_QUERY = `
-  query IssueDetail($id: ID!, $initial: Boolean! = false) {
+  query IssueDetail($id: ID!, $initial: Boolean! = false, $includeApplications: Boolean! = false) {
     issue(id: $id) {
       id title description category status githubRepo bountyAmount { formatted raw decimals } requiredSkills difficulty timeEstimate
       expiresAt viewCount applicationCount createdAt clientId developerId noExecutableTests
       viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout similarFixIssueId }
       escrow { amountRaw availableActions { action reasonDisabled } }
       reservation @include(if: $initial) { id status amountRaw }
-      ownerApplications @include(if: $initial) {
+      ownerApplications @include(if: $includeApplications) {
         id status message createdAt reuseOfIssueId
         developer { id name avatar walletAddress reputationScore isGithubVerified skills }
       }
-      viewerApplication @include(if: $initial) { id status message }
+      viewerApplication @include(if: $includeApplications) { id status message }
       viewerSubmissions @include(if: $initial) {
         id status deliveryHash description pullRequestUrl submittedAt reviewedAt reviewNotes developer { name walletAddress }
       }
@@ -57,26 +57,6 @@ const ISSUE_QUERY = `
       attachments { id fileName fileUrl fileMime }
       client { id name avatar walletAddress reputationScore isGithubVerified }
       developer { id name avatar walletAddress reputationScore isGithubVerified }
-    }
-  }
-`;
-
-const APPLICATIONS_QUERY = `
-  query IssueApplications($issueId: String!) {
-    applications(issueId: $issueId) {
-      id status message createdAt reuseOfIssueId
-      developer { id name avatar walletAddress reputationScore isGithubVerified skills }
-    }
-  }
-`;
-
-const MY_APPLICATIONS_QUERY = `
-  query MyApplications {
-    myApplications {
-      id
-      issueId
-      status
-      message
     }
   }
 `;
@@ -132,7 +112,6 @@ type DetailResponse = { issue: (Omit<IssueDetail, "bountyAmount" | "bountyRaw" |
   viewerSubmissions?: Submission[];
 }) | null };
 
-type ApplicationResponse = { applications: Application[] };
 type Submission = { id: string; status: string; deliveryHash?: string | null; description?: string | null; pullRequestUrl?: string | null; submittedAt: string; reviewedAt?: string | null; reviewNotes?: string | null; developer: { name?: string | null; walletAddress: string } };
 type SubmissionResponse = { submissions: Submission[] };
 
@@ -193,28 +172,36 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   }, []);
 
   // Refreshes in place; the full-page loader and error reset happen only when the issue id changes (see effect below).
-  const load = useCallback(async (initial = false) => {
+  const load = useCallback(async (scope: "overview" | "initial" | "applications" = "overview") => {
     const isCurrent = () => currentView.current.issueId === issueId && currentView.current.userId === user?.id;
+    if (!isCurrent()) return;
+    const initial = scope === "initial";
+    const includeApplications = scope !== "overview";
+    const key = ["issue-detail", issueId, user?.id ?? null];
+    const variables = { id: issueId, initial, includeApplications };
     try {
       const result = initial
         ? await queryClient.fetchQuery({
-            queryKey: ["issue-detail", issueId, user?.id ?? null, "initial"],
-            queryFn: () => graphqlRequest<DetailResponse>(ISSUE_QUERY, { id: issueId, initial: true }),
+            queryKey: [...key, "initial"],
+            queryFn: () => graphqlRequest<DetailResponse>(ISSUE_QUERY, variables),
             staleTime: 0,
             retry: false,
           })
-        : await graphqlRequest<DetailResponse>(ISSUE_QUERY, { id: issueId });
+        : await graphqlRequest<DetailResponse>(ISSUE_QUERY, variables);
       if (!isCurrent()) return;
-      if (result.issue) {
-        queryClient.setQueryData(["issue-detail", issueId, user?.id ?? null], result.issue);
-        checksRequired.current = !result.issue.noExecutableTests;
+      const next = result.issue;
+      queryClient.setQueryData<DetailResponse["issue"]>(key, (cached) => initial || !next ? next : { ...cached, ...next });
+      if (next) {
+        checksRequired.current = !next.noExecutableTests;
         setRequiresTests(checksRequired.current);
+        if (includeApplications) {
+          setApplications(next.ownerApplications ?? []);
+          setMyApplication(next.viewerApplication ?? null);
+        }
         if (initial) {
-          const { reservation, ownerApplications, viewerApplication, viewerSubmissions } = result.issue;
-          setReservationId(reservation?.status === "AWAITING_FUNDING" && result.issue.clientId === user?.id ? reservation.id : null);
+          const { reservation, viewerSubmissions } = next;
+          setReservationId(reservation?.status === "AWAITING_FUNDING" && next.clientId === user?.id ? reservation.id : null);
           setReservedRaw(reservation?.amountRaw ?? null);
-          setApplications(ownerApplications ?? []);
-          setMyApplication(viewerApplication ?? null);
           setSubmissions(viewerSubmissions ?? []);
           const viewKey = `${issueId}:${user?.id}`;
           if (user?.id && viewed.current !== viewKey) {
@@ -222,7 +209,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
             void recordView(issueId);
           }
         }
-        setIssue({ ...result.issue, bountyAmount: Number(result.issue.bountyAmount.formatted), bountyRaw: result.issue.bountyAmount.raw, bountyDecimals: result.issue.bountyAmount.decimals });
+        setIssue({ ...next, bountyAmount: Number(next.bountyAmount.formatted), bountyRaw: next.bountyAmount.raw, bountyDecimals: next.bountyAmount.decimals });
       } else {
         setIssue(null);
         setError("Bounty not found.");
@@ -256,7 +243,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     setSubmissions(cached?.viewerSubmissions ?? []);
     setReservationId(null);
     setReservedRaw(null);
-    void load(true);
+    void load("initial");
   }, [issueId, load, queryClient, user?.id, setError]);
 
   // Live refresh: the server emits escrow:invalidate to the task room when a confirmed transaction changes the escrow.
@@ -420,9 +407,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
       await graphqlRequest(APPLY_MUTATION, { input: { issueId, ...(applicationText.trim() ? { message: applicationText.trim() } : {}), ...(reuseOfIssueId ? { reuseOfIssueId } : {}) } });
       setNotice("Application sent. The client will be notified.");
       setApplicationText("");
-      await load();
-      const myRes = await graphqlRequest<{ myApplications: Array<{ id: string; issueId: string; status: string; message?: string | null }> }>(MY_APPLICATIONS_QUERY).catch(() => null);
-      if (myRes) setMyApplication(myRes.myApplications?.find((a) => a.issueId === issueId) ?? null);
+      await load("applications");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not apply."); }
     finally { setIsWorking(false); }
   };
@@ -432,8 +417,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     try {
       await graphqlRequest(WITHDRAW_APPLICATION, { id: applicationId });
       setNotice("Application withdrawn.");
-      setMyApplication(null);
-      await load();
+      await load("applications");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not withdraw application."); }
     finally { setIsWorking(false); }
   };
@@ -442,9 +426,8 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     setIsWorking(true); setError(null); setNotice(null);
     try {
       await graphqlRequest(REJECT_APPLICATION, { id: applicationId });
-      setApplications((current) => current.map((app) => app.id === applicationId ? { ...app, status: "REJECTED" } : app));
       setNotice("Applicant rejected.");
-      await load();
+      await load("applications");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not reject applicant."); }
     finally { setIsWorking(false); }
   };
@@ -490,8 +473,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
       setReservationId(result.selectDeveloper.id);
       setReservedRaw(result.selectDeveloper.amountRaw);
       setNotice("Developer selected. Fund the escrow to start the work.");
-      await load();
-      setApplications((await graphqlRequest<ApplicationResponse>(APPLICATIONS_QUERY, { issueId })).applications);
+      await load("applications");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not select developer."); }
     finally { setIsWorking(false); }
   };
