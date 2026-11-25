@@ -93,6 +93,43 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
     expect(existsSync(destination)).toBe(false);
   });
 
+  it("rejects chat files whose bytes don't match the declared type with FILE_CONTENT_MISMATCH", async () => {
+    const cases: [string, Uint8Array][] = [
+      ["image/png", new Uint8Array([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00])],
+      ["image/png", new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])],
+      ["application/pdf", new TextEncoder().encode("not a pdf")],
+      ["image/webp", new TextEncoder().encode("RIFF\0\0\0\0WAVEfmt ")],
+      ["text/plain", new Uint8Array([0x68, 0x69, 0x00, 0x68, 0x69])],
+      ["application/json", new Uint8Array([0x7b, 0xff, 0xfe, 0x7d])],
+    ];
+    for (const [mime, bytes] of cases) {
+      const { id, destination } = await stored(mime, bytes);
+      const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
+      expect(response.status, mime).toBe(422);
+      expect(await response.json()).toMatchObject({ code: "FILE_CONTENT_MISMATCH" });
+      expect((await prisma.attachment.findUniqueOrThrow({ where: { id } })).status).toBe("REJECTED");
+      expect(existsSync(destination)).toBe(false);
+    }
+  });
+
+  it("attaches chat files whose bytes match the declared type", async () => {
+    const cases: [string, Uint8Array][] = [
+      ["image/png", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])],
+      ["image/jpeg", new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])],
+      ["image/gif", new TextEncoder().encode("GIF89a\x01\0\x01\0")],
+      ["image/webp", new TextEncoder().encode("RIFF\0\0\0\0WEBPVP8 ")],
+      ["application/pdf", new TextEncoder().encode("%PDF-1.7\n")],
+      ["text/markdown", new TextEncoder().encode("# Héllo ✓")],
+      ["application/json", new TextEncoder().encode('{"ok":true}')],
+    ];
+    for (const [mime, bytes] of cases) {
+      const { id } = await stored(mime, bytes);
+      const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
+      expect(response.status, mime).toBe(200);
+      expect((await prisma.attachment.findUniqueOrThrow({ where: { id } })).status).toBe("ATTACHED");
+    }
+  });
+
   it("attaches a valid chat file at complete", async () => {
     const { id, destination } = await stored("text/plain", new TextEncoder().encode("hello chat"));
     const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));

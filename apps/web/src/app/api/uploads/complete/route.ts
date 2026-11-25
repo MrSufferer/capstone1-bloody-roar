@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import { NextResponse } from "next/server";
@@ -21,6 +22,18 @@ async function readStoredBytes(key: string): Promise<Uint8Array | null> {
   const localPath = localUploadPath(key);
   if (!localPath) return null;
   return readFile(localPath.destination).then((bytes) => new Uint8Array(bytes)).catch(() => null);
+}
+
+function bytesMatchType(mime: string, bytes: Uint8Array) {
+  const head = Buffer.from(bytes.subarray(0, 12)).toString("latin1");
+  const signatures: Record<string, boolean> = {
+    "image/jpeg": head.startsWith("\xff\xd8\xff"),
+    "image/png": head.startsWith("\x89PNG\r\n\x1a\n"),
+    "image/gif": /^GIF8[79]a/.test(head),
+    "image/webp": head.startsWith("RIFF") && head.slice(8, 12) === "WEBP",
+    "application/pdf": head.startsWith("%PDF-"),
+  };
+  return signatures[mime] ?? (isUtf8(bytes) && !bytes.includes(0));
 }
 
 // Step two of an upload: confirm the bytes arrived at the declared size, then record their SHA-256.
@@ -56,6 +69,7 @@ export async function POST(request: Request) {
     attachment.purpose !== "CHAT" ? null
     : !CHAT_FILE_TYPES.includes(attachment.fileMime as never) ? { error: "This file type can't be sent in chat", code: "FILE_TYPE_NOT_ALLOWED" }
     : bytes.byteLength > CHAT_MAX_FILE_SIZE_BYTES ? { error: "Chat files must be 10 MB or smaller", code: "FILE_TOO_LARGE" }
+    : !bytesMatchType(attachment.fileMime, bytes) ? { error: "The file content doesn't match its type", code: "FILE_CONTENT_MISMATCH" }
     : null;
   if (chatRejection) {
     const s3 = getS3Storage();
