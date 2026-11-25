@@ -56,6 +56,30 @@ describe("similar fix label (US-107)", () => {
     expect(call?.[1]).toEqual({ input: { issueId: "issue", reuseOfIssueId: "old-issue" } });
   });
 
+  it("refreshes the current bounty's application after applying and withdrawing", async () => {
+    mockIssue(null);
+    const baseRequest = request.getMockImplementation()!;
+    let status: "PENDING" | "WITHDRAWN" | null = null;
+    request.mockImplementation(async (query: string, variables?: { initial?: boolean; includeApplications?: boolean }) => {
+      if (query.includes("mutation Apply")) status = "PENDING";
+      if (query.includes("mutation WithdrawApp")) status = "WITHDRAWN";
+      const result = await baseRequest(query);
+      if (!query.includes("query IssueDetail")) return result;
+      const application = status ? { id: "app", status, message: "Saved cover note" } : null;
+      return { issue: {
+        ...result.issue,
+        viewerCapabilities: { canApply: status !== "PENDING" },
+        ...(variables?.initial || variables?.includeApplications ? { viewerApplication: application } : {}),
+      } };
+    });
+    await show();
+    fireEvent.click(screen.getByRole("button", { name: /Apply to this task/ }));
+    expect(await screen.findByText("Saved cover note")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Withdraw application" }));
+    expect(await screen.findByRole("button", { name: /Apply to this task/ })).toBeEnabled();
+    expect(request.mock.calls.some(([query]) => String(query).includes("query MyApplications"))).toBe(false);
+  });
+
   it("shows the client the bounty, the reuse price and the deposit for a reuse application", async () => {
     session.user = { ...session.user, id: "client", role: "CLIENT" };
     mockIssue(null, { viewerCapabilities: { canSelect: true }, ownerApplications: [
@@ -116,4 +140,5 @@ it("updates the escrow total when selecting a reuse application and cancelling i
   fireEvent.click(screen.getByRole("button", { name: "Cancel reservation" }));
   await screen.findByRole("button", { name: "Select developer" });
   expect(screen.getByRole("img", { name: /client pays 110$/ })).toBeInTheDocument();
+  expect(request.mock.calls.some(([query]) => String(query).includes("query IssueApplications"))).toBe(false);
 });

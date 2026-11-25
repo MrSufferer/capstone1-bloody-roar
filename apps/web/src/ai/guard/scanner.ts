@@ -32,31 +32,32 @@ export interface GuardResult {
 }
 
 const BIP39_WORDS = new Set<string>(wordlist);
-const SEED_PHRASE_LENGTHS = [12, 15, 18, 21, 24];
 const MAX_SEED_PHRASE_CHECKS = 1_000;
 
 // A run of 12-24 BIP-39 words only counts when its checksum is valid, so ordinary prose is not masked.
 function maskSeedPhrases(content: string): { content: string; matched: boolean } {
-  const tokens = [...content.matchAll(/[A-Za-z]+/g)].map((match) => ({
-    word: match[0],
-    start: match.index ?? 0,
-    end: (match.index ?? 0) + match[0].length,
-  }));
+  const tokens = /[A-Za-z]+/g;
+  const followingWord = /\s+([A-Za-z]+)/y;
   const spans: Array<[number, number]> = [];
   let checks = 0;
 
-  for (let i = 0; i < tokens.length && checks < MAX_SEED_PHRASE_CHECKS; i++) {
-    for (const length of SEED_PHRASE_LENGTHS) {
-      const window = tokens.slice(i, i + length);
-      const [first] = window;
-      const last = window.at(-1);
-      if (!first || !last || window.length < length || !window.every((token) => BIP39_WORDS.has(token.word.toLowerCase()))) break;
-      // Only letters and whitespace between the first and last word means the run is contiguous.
-      if (!/^[A-Za-z\s]+$/.test(content.slice(first.start, last.end))) continue;
+  let first: RegExpExecArray | null;
+  while (checks < MAX_SEED_PHRASE_CHECKS && (first = tokens.exec(content))) {
+    const word = first[0].toLowerCase();
+    if (!BIP39_WORDS.has(word)) continue;
+
+    const candidate = [word];
+    followingWord.lastIndex = tokens.lastIndex;
+    for (let length = 2; length <= 24; length++) {
+      const next = followingWord.exec(content)?.[1]?.toLowerCase();
+      if (!next || !BIP39_WORDS.has(next)) break;
+      candidate.push(next);
+
+      if (length < 12 || length % 3 !== 0) continue;
       checks++;
-      if (!validateMnemonic(window.map((token) => token.word.toLowerCase()).join(" "), wordlist)) continue;
-      spans.push([first.start, last.end]);
-      i += length - 1;
+      if (!validateMnemonic(candidate.join(" "), wordlist)) continue;
+      spans.push([first.index, followingWord.lastIndex]);
+      tokens.lastIndex = followingWord.lastIndex;
       break;
     }
   }
