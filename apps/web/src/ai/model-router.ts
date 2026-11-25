@@ -1,7 +1,7 @@
 import { AILogStatus, prisma } from "@bloody-roar/database";
 import { auditHash } from "./hash";
 
-export type AIWorkload = "GUARD" | "TESTGEN" | "DEBATE";
+export type AIWorkload = "GUARD" | "TESTGEN" | "DEBATE" | "SIMILARITY";
 export type AIMessage = { role: "system" | "user"; content: string };
 
 export interface AICompletionInput {
@@ -53,12 +53,14 @@ export interface AIRouterDependencies {
 
 const GROQ_MODELS: Record<AIWorkload, string> = {
   GUARD: "openai/gpt-oss-20b",
+  SIMILARITY: "openai/gpt-oss-20b",
   TESTGEN: "openai/gpt-oss-120b",
   DEBATE: "openai/gpt-oss-120b",
 };
 
 const OPENAI_MODELS: Record<AIWorkload, string> = {
   GUARD: "gpt-4.1-mini",
+  SIMILARITY: "gpt-4.1-mini",
   TESTGEN: "gpt-4.1-mini",
   DEBATE: "gpt-4.1-mini",
 };
@@ -99,6 +101,14 @@ function buildProviders(task: AIWorkload): AIProvider[] {
   }
 
   return providers;
+}
+
+export function parseAIJson(text: string): unknown {
+  const unfenced = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("The model returned invalid JSON.");
+  return JSON.parse(unfenced.slice(start, end + 1));
 }
 
 export function isAIConfigured(task: AIWorkload) {

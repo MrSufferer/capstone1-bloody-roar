@@ -23,11 +23,14 @@ import { AuthRequiredPanel } from "@/components/auth/auth-required-panel";
 import { useUiPreferences } from "@/lib/ui-preferences";
 import { MarketplaceEmpty } from "./marketplace-empty";
 import type { IssueItem } from "./issue-card";
-import { sendPreparedCalls } from "@/lib/web3/send-prepared";
-import { signFundingIntent } from "@/lib/web3/funding-intent";
 import { uploadFile } from "@/lib/upload";
-import { formatTokenAmount, splitPayout } from "@bloody-roar/shared/money";
-import { PLATFORM_FEE_BPS } from "@bloody-roar/shared/constants";
+import { bpsOf, depositTotal, formatTokenAmount, splitPayout } from "@bloody-roar/shared/money";
+import { PLATFORM_FEE_BPS, REUSE_PRICE_BPS } from "@bloody-roar/shared/constants";
+import type * as SendPrepared from "@/lib/web3/send-prepared";
+import type * as FundingIntent from "@/lib/web3/funding-intent";
+
+const sendPreparedCalls: typeof SendPrepared.sendPreparedCalls = async (...args) => (await import("@/lib/web3/send-prepared")).sendPreparedCalls(...args);
+const signFundingIntent: typeof FundingIntent.signFundingIntent = async (...args) => (await import("@/lib/web3/funding-intent")).signFundingIntent(...args);
 
 // Date input value (YYYY-MM-DD) seven days out; the contract deadline is the end of that day in UTC.
 const defaultDeliveryDeadline = () => new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
@@ -35,12 +38,21 @@ const defaultDeliveryDeadline = () => new Date(Date.now() + 7 * 86_400_000).toIS
 const UNREAD_QUERY = `query UnreadMessages($issueId: String!) { unreadMessageCount(issueId: $issueId) }`;
 
 const ISSUE_QUERY = `
-  query IssueDetail($id: ID!) {
+  query IssueDetail($id: ID!, $initial: Boolean! = false) {
     issue(id: $id) {
       id title description category status githubRepo bountyAmount { formatted raw decimals } requiredSkills difficulty timeEstimate
       expiresAt viewCount applicationCount createdAt clientId developerId noExecutableTests
-      viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout }
-      escrow { availableActions { action reasonDisabled } }
+      viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout similarFixIssueId }
+      escrow { amountRaw availableActions { action reasonDisabled } }
+      reservation @include(if: $initial) { id status amountRaw }
+      ownerApplications @include(if: $initial) {
+        id status message createdAt reuseOfIssueId
+        developer { id name avatar walletAddress reputationScore isGithubVerified skills }
+      }
+      viewerApplication @include(if: $initial) { id status message }
+      viewerSubmissions @include(if: $initial) {
+        id status deliveryHash description pullRequestUrl submittedAt reviewedAt reviewNotes developer { name walletAddress }
+      }
       token { symbol name }
       attachments { id fileName fileUrl fileMime }
       client { id name avatar walletAddress reputationScore isGithubVerified }
@@ -52,7 +64,7 @@ const ISSUE_QUERY = `
 const APPLICATIONS_QUERY = `
   query IssueApplications($issueId: String!) {
     applications(issueId: $issueId) {
-      id status message createdAt
+      id status message createdAt reuseOfIssueId
       developer { id name avatar walletAddress reputationScore isGithubVerified skills }
     }
   }
@@ -101,15 +113,24 @@ const PREPARE_RAISE_DISPUTE = `mutation PrepareRaise($issue: ID!, $manifest: ID!
 const CANCEL_MUTATION = `mutation Cancel($id: ID!) { cancelIssue(id: $id) { id status } }`;
 const SUBMISSIONS_QUERY = `query TaskSubmissions($issueId: String!) { submissions(issueId: $issueId) { id status deliveryHash description pullRequestUrl submittedAt reviewedAt reviewNotes developer { name walletAddress } } }`;
 
+const recordView = (id: string) =>
+  graphqlRequest("mutation RecordIssueView($id: ID!) { recordIssueView(issueId: $id) }", { id }).catch(() => undefined);
+
 type PreparedStep = { intentId: string; method: string; contractAddress: string; data: string; value: string };
 
 type ReservationRow = { id: string; status: string; chainId: number; contractAddress: string; tokenAddress: string; escrowKey: string; termsHash: string; amountRaw: string; deliveryDeadline: string; clientWallet: string; developerWallet: string };
 
-type ViewerCapabilities = { canApply?: boolean; canSelect: boolean; canFund: boolean; canSubmit: boolean; canRelease: boolean; canRequestChanges: boolean; canDispute: boolean; canProposeSettlement: boolean; canRevokeSettlement: boolean; canAcceptSettlement: boolean; canSubmitEvidence: boolean; canChallengeRuling: boolean; canFinalizeRuling: boolean; canFinalizeArbiterTimeoutSplit: boolean; canClaimMissedDeliveryRefund: boolean; canClaimReviewTimeout: boolean };
-type IssueDetail = IssueItem & { noExecutableTests: boolean; githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
-type Application = { id: string; status: string; message?: string | null; createdAt: string; developer: IssueItem["client"] & { skills?: string[] } };
+type ViewerCapabilities = { canApply?: boolean; canSelect: boolean; canFund: boolean; canSubmit: boolean; canRelease: boolean; canRequestChanges: boolean; canDispute: boolean; canProposeSettlement: boolean; canRevokeSettlement: boolean; canAcceptSettlement: boolean; canSubmitEvidence: boolean; canChallengeRuling: boolean; canFinalizeRuling: boolean; canFinalizeArbiterTimeoutSplit: boolean; canClaimMissedDeliveryRefund: boolean; canClaimReviewTimeout: boolean; similarFixIssueId?: string | null };
+type IssueDetail = IssueItem & { noExecutableTests: boolean; githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { amountRaw?: string; availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
+type Application = { id: string; status: string; message?: string | null; createdAt: string; reuseOfIssueId?: string | null; developer: IssueItem["client"] & { skills?: string[] } };
 
-type DetailResponse = { issue: (Omit<IssueDetail, "bountyAmount" | "bountyRaw" | "bountyDecimals"> & { bountyAmount: { formatted: string; raw: string; decimals: number } }) | null };
+type DetailResponse = { issue: (Omit<IssueDetail, "bountyAmount" | "bountyRaw" | "bountyDecimals"> & {
+  bountyAmount: { formatted: string; raw: string; decimals: number };
+  reservation?: (Pick<ReservationRow, "id" | "status"> & { amountRaw?: string }) | null;
+  ownerApplications?: Application[];
+  viewerApplication?: { id: string; status: string; message?: string | null } | null;
+  viewerSubmissions?: Submission[];
+}) | null };
 
 type ApplicationResponse = { applications: Application[] };
 type Submission = { id: string; status: string; deliveryHash?: string | null; description?: string | null; pullRequestUrl?: string | null; submittedAt: string; reviewedAt?: string | null; reviewNotes?: string | null; developer: { name?: string | null; walletAddress: string } };
@@ -130,6 +151,8 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
   const [applicationText, setApplicationText] = useState("");
+  const [reuseFix, setReuseFix] = useState(false);
+  const [reservedRaw, setReservedRaw] = useState<string | null>(null);
   const [disputeReason, setDisputeReason] = useState("");
   const [reservationId, setReservationId] = useState<string | null>(null);
   const [settlementPercent, setSettlementPercent] = useState("50");
@@ -143,6 +166,8 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const [showDisputeForm, setShowDisputeForm] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [requiresTests, setRequiresTests] = useState(false);
+  const checksRequired = useRef(false);
+  const viewed = useRef<string | null>(null);
   const [testsPassed, setTestsPassed] = useState(false);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [deliveryDescription, setDeliveryDescription] = useState("");
@@ -168,14 +193,35 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   }, []);
 
   // Refreshes in place; the full-page loader and error reset happen only when the issue id changes (see effect below).
-  const load = useCallback(async () => {
+  const load = useCallback(async (initial = false) => {
     const isCurrent = () => currentView.current.issueId === issueId && currentView.current.userId === user?.id;
     try {
-      const result = await graphqlRequest<DetailResponse>(ISSUE_QUERY, { id: issueId });
+      const result = initial
+        ? await queryClient.fetchQuery({
+            queryKey: ["issue-detail", issueId, user?.id ?? null, "initial"],
+            queryFn: () => graphqlRequest<DetailResponse>(ISSUE_QUERY, { id: issueId, initial: true }),
+            staleTime: 0,
+            retry: false,
+          })
+        : await graphqlRequest<DetailResponse>(ISSUE_QUERY, { id: issueId });
       if (!isCurrent()) return;
       if (result.issue) {
         queryClient.setQueryData(["issue-detail", issueId, user?.id ?? null], result.issue);
-        setRequiresTests(!result.issue.noExecutableTests);
+        checksRequired.current = !result.issue.noExecutableTests;
+        setRequiresTests(checksRequired.current);
+        if (initial) {
+          const { reservation, ownerApplications, viewerApplication, viewerSubmissions } = result.issue;
+          setReservationId(reservation?.status === "AWAITING_FUNDING" && result.issue.clientId === user?.id ? reservation.id : null);
+          setReservedRaw(reservation?.amountRaw ?? null);
+          setApplications(ownerApplications ?? []);
+          setMyApplication(viewerApplication ?? null);
+          setSubmissions(viewerSubmissions ?? []);
+          const viewKey = `${issueId}:${user?.id}`;
+          if (user?.id && viewed.current !== viewKey) {
+            viewed.current = viewKey;
+            void recordView(issueId);
+          }
+        }
         setIssue({ ...result.issue, bountyAmount: Number(result.issue.bountyAmount.formatted), bountyRaw: result.issue.bountyAmount.raw, bountyDecimals: result.issue.bountyAmount.decimals });
       } else {
         setIssue(null);
@@ -189,6 +235,8 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   }, [issueId, queryClient, user?.id, setError]);
 
   const onExecutableChange = useCallback((hasTests: boolean) => {
+    if (checksRequired.current === hasTests) return;
+    checksRequired.current = hasTests;
     setRequiresTests(hasTests);
     void load();
   }, [load]);
@@ -198,11 +246,17 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     const cached = queryClient.getQueryData<NonNullable<DetailResponse["issue"]>>(key);
     setError(null);
     if (cached) {
-      setRequiresTests(!cached.noExecutableTests);
+      checksRequired.current = !cached.noExecutableTests;
+      setRequiresTests(checksRequired.current);
       setIssue({ ...cached, bountyAmount: Number(cached.bountyAmount.formatted), bountyRaw: cached.bountyAmount.raw, bountyDecimals: cached.bountyAmount.decimals });
       setIsLoading(false);
     } else { setIssue(null); setIsLoading(true); }
-    if (!cached || Date.now() - (queryClient.getQueryState(key)?.dataUpdatedAt ?? 0) >= 60_000) void load();
+    setApplications(cached?.ownerApplications ?? []);
+    setMyApplication(cached?.viewerApplication ?? null);
+    setSubmissions(cached?.viewerSubmissions ?? []);
+    setReservationId(null);
+    setReservedRaw(null);
+    void load(true);
   }, [issueId, load, queryClient, user?.id, setError]);
 
   // Live refresh: the server emits escrow:invalidate to the task room when a confirmed transaction changes the escrow.
@@ -240,49 +294,9 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   // The card shows only when the server lists an action or evidence step for this viewer; the status check lives there.
   const escrowCardVisible = Boolean(issue?.viewerCapabilities?.canSubmitEvidence || ESCROW_ACTIONS.some((action) => issue?.viewerCapabilities?.[action.flag] && actionOf(action.action)));
 
-  useEffect(() => {
-    if (!isClient) return;
-    let active = true;
-    void graphqlRequest<{ reservation: ReservationRow | null }>(RESERVATION_QUERY, { issueId })
-      .then((result) => { if (active) setReservationId(result.reservation?.status === "AWAITING_FUNDING" ? result.reservation.id : null); })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, [isClient, issueId]);
   const isDeveloper = Boolean(user && issue?.developerId === user.id);
   const isAdmin = user?.role === "ADMIN";
   const canChat = Boolean(user && (isClient || isDeveloper || (isAdmin && issue?.status === "DISPUTED")));
-
-  useEffect(() => {
-    if (!isClient) return;
-    let active = true;
-    void graphqlRequest<ApplicationResponse>(APPLICATIONS_QUERY, { issueId })
-      .then((result) => { if (active) setApplications(result.applications); })
-      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load applications."); });
-    return () => { active = false; };
-  }, [isClient, issueId, setError]);
-
-  useEffect(() => {
-    if (!user || isClient || isAdmin) return;
-    let active = true;
-    void graphqlRequest<{ myApplications: Array<{ id: string; issueId: string; status: string; message?: string | null }> }>(MY_APPLICATIONS_QUERY)
-      .then((result) => {
-        if (active) {
-          const app = result.myApplications?.find((a) => a.issueId === issueId) ?? null;
-          setMyApplication(app);
-        }
-      })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, [user, isClient, isAdmin, issueId]);
-
-  useEffect(() => {
-    if (!canChat) return;
-    let active = true;
-    void graphqlRequest<SubmissionResponse>(SUBMISSIONS_QUERY, { issueId })
-      .then((result) => { if (active) setSubmissions(result.submissions); })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, [canChat, issueId]);
 
   // Unread badge on the Bounty Chat tab: the server count is the only source; refetch it on each realtime message from the other side.
   const [chatUnread, setChatUnread] = useState(0);
@@ -402,7 +416,8 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     event.preventDefault();
     setIsWorking(true); setError(null); setNotice(null);
     try {
-      await graphqlRequest(APPLY_MUTATION, { input: { issueId, ...(applicationText.trim() ? { message: applicationText.trim() } : {}) } });
+      const reuseOfIssueId = reuseFix ? issue?.viewerCapabilities?.similarFixIssueId : null;
+      await graphqlRequest(APPLY_MUTATION, { input: { issueId, ...(applicationText.trim() ? { message: applicationText.trim() } : {}), ...(reuseOfIssueId ? { reuseOfIssueId } : {}) } });
       setNotice("Application sent. The client will be notified.");
       setApplicationText("");
       await load();
@@ -467,12 +482,13 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const assign = async (applicationId: string) => {
     setIsWorking(true); setError(null); setNotice(null);
     try {
-      const result = await graphqlRequest<{ selectDeveloper: { id: string } }>(SELECT_DEVELOPER, {
+      const result = await graphqlRequest<{ selectDeveloper: { id: string; amountRaw: string } }>(SELECT_DEVELOPER, {
         issue: issueId,
         application: applicationId,
         deadline: new Date(`${deliveryDeadline}T23:59:59Z`).toISOString(),
       });
       setReservationId(result.selectDeveloper.id);
+      setReservedRaw(result.selectDeveloper.amountRaw);
       setNotice("Developer selected. Fund the escrow to start the work.");
       await load();
       setApplications((await graphqlRequest<ApplicationResponse>(APPLICATIONS_QUERY, { issueId })).applications);
@@ -504,6 +520,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     try {
       await graphqlRequest(CANCEL_RESERVATION, { id: reservationId });
       setReservationId(null);
+      setReservedRaw(null);
       setNotice("Reservation cancelled.");
       void load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not cancel the reservation."); }
@@ -548,9 +565,15 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     );
   }
 
-  const payout = splitPayout(BigInt(issue.bountyRaw), PLATFORM_FEE_BPS);
+  const principalRaw = BigInt(issue.escrow?.amountRaw ?? reservedRaw ?? issue.bountyRaw);
+  const payout = splitPayout(principalRaw, PLATFORM_FEE_BPS);
   const devShare = formatTokenAmount(payout.developer, issue.bountyDecimals);
   const platformFee = formatTokenAmount(payout.fee, issue.bountyDecimals);
+  const clientTotal = formatTokenAmount(depositTotal(principalRaw, PLATFORM_FEE_BPS), issue.bountyDecimals);
+  const reuseRaw = bpsOf(BigInt(issue.bountyRaw), REUSE_PRICE_BPS);
+  const reusePrice = formatTokenAmount(reuseRaw, issue.bountyDecimals);
+  const reuseDeposit = formatTokenAmount(depositTotal(reuseRaw, PLATFORM_FEE_BPS), issue.bountyDecimals);
+  const feePercent = `${PLATFORM_FEE_BPS / 100}%`;
 
   const statusInfo = issueStatus(issue.status);
 
@@ -590,7 +613,12 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                 <Clock className="ico" style={{ width: 14, height: 14 }} />
                 Deadline: {issue.expiresAt ? new Date(issue.expiresAt).toLocaleDateString() : "Flexible"}
               </span>
-              <span className="cd hot">2.5% fee on release</span>
+              <span className="cd hot">{feePercent} platform fee paid by the client</span>
+              {issue.viewerCapabilities?.similarFixIssueId && (
+                <Link href={`/issues/${issue.viewerCapabilities.similarFixIssueId}`} className="cd" data-testid="similar-fix-label">
+                  You fixed a similar problem
+                </Link>
+              )}
             </div>
           </div>
 
@@ -842,6 +870,14 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                               <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "var(--ink-2)" }}>
                                 {app.message || "No cover letter provided."}
                               </p>
+                              {app.reuseOfIssueId && (
+                                <p data-testid="reuse-price" style={{ margin: "4px 0 0 0", fontSize: 12, color: "var(--ink-2)" }}>
+                                  Reuses their fix of <Link href={`/issues/${app.reuseOfIssueId}`}>a similar issue</Link>. Bounty{" "}
+                                  <b className="mono">{issue.bountyAmount} {issue.token.symbol}</b>, reuse price{" "}
+                                  <b className="mono">{reusePrice} {issue.token.symbol}</b>, you deposit{" "}
+                                  <b className="mono">{reuseDeposit} {issue.token.symbol}</b> with the fee.
+                                </p>
+                              )}
                             </div>
                             <Button type="button" variant="outline" size="sm" onClick={() => { void graphqlRequest<{ openApplicationChat: string }>(`mutation OpenChat($id: ID!) { openApplicationChat(applicationId: $id) }`, { id: app.id }).then((r) => router.push(`/messages?c=${r.openApplicationChat}`)).catch((e) => setError(e.message)); }}>Message</Button>
                             {app.status === "PENDING" && issue.status === "OPEN" && issue.viewerCapabilities?.canSelect && (
@@ -1140,13 +1176,13 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                       <dl className="kv">
                         <dt>Escrow ID</dt>
                         <dd className="mono">BR-{issue.id.slice(0, 12)}</dd>
-                        <dt>Total Locked</dt>
+                        <dt>Total Locked (client pays)</dt>
                         <dd className="mono" style={{ color: "var(--gold)", fontWeight: 600 }}>
-                          {issue.bountyAmount.toLocaleString()} {issue.token.symbol}
+                          {clientTotal} {issue.token.symbol}
                         </dd>
-                        <dt>Developer Net (97.5%)</dt>
+                        <dt>Developer Net</dt>
                         <dd className="mono">{devShare} {issue.token.symbol}</dd>
-                        <dt>Platform Fee (2.5%)</dt>
+                        <dt>Platform Fee ({feePercent})</dt>
                         <dd className="mono">{platformFee} {issue.token.symbol}</dd>
                         <dt>Review Timeout</dt>
                         <dd className="mono">7 days after the latest submission</dd>
@@ -1182,9 +1218,9 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                 </div>
 
                 <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div className="bd" role="img" aria-label="Developer 97.5 percent, fee 2.5 percent">
-                    <i style={{ width: "97.5%", background: "var(--ok)" }} />
-                    <i style={{ width: "2.5%", background: "var(--ink-3)" }} />
+                  <div className="bd" role="img" aria-label={`Developer ${devShare}, fee ${platformFee}, client pays ${clientTotal}`}>
+                    <i style={{ flex: 10_000, background: "var(--ok)" }} />
+                    <i style={{ flex: PLATFORM_FEE_BPS, background: "var(--ink-3)" }} />
                   </div>
                   <div className="legend">
                     <span><i style={{ background: "var(--ok)" }} /> Developer: <b className="mono">{devShare}</b></span>
@@ -1275,6 +1311,12 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                               placeholder="Relevant experience, how you would approach it, your timeline."
                             />
                           </FormField>
+                          {issue.viewerCapabilities?.similarFixIssueId && (
+                            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                              <input type="checkbox" checked={reuseFix} onChange={(e) => setReuseFix(e.target.checked)} />
+                              Reuse my fix of issue BR-{issue.viewerCapabilities.similarFixIssueId.slice(0, 8)} for {reusePrice} {issue.token.symbol} ({REUSE_PRICE_BPS / 100}% of the bounty)
+                            </label>
+                          )}
                           <button type="submit" className="btn btn-p" disabled={isWorking || Boolean(issue.viewerCapabilities && !issue.viewerCapabilities.canApply)}>
                             <MessageSquare className="ico" style={{ width: 14, height: 14 }} /> Apply to this task
                           </button>
@@ -1370,6 +1412,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                     <li><b>24 h</b> client funding reservation</li>
                     <li><b>7 days</b> review window after the latest submission</li>
                     <li><b>72 h</b> dispute evidence submission</li>
+                    <li><b>Reuse</b> the developer keeps a non-exclusive licence to reuse their fix</li>
                   </ol>
                 </div>
               </section>

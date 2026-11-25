@@ -54,9 +54,22 @@ describe("automated checks warning on the issue page", () => {
     await showIssue();
     expect(await screen.findByText(headline)).toBeInTheDocument();
     expect(screen.getByText(explanation)).toBeInTheDocument();
-    expect(request).toHaveBeenCalledWith(expect.stringContaining("noExecutableTests"), { id: "issue" });
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("noExecutableTests"), { id: "issue", initial: true });
     await act(async () => { fireEvent.click(screen.getByRole("tab", { name: /delivery/i })); });
     expect(screen.getByText(headline)).toBeInTheDocument();
+  });
+
+  it("loads the issue and viewer data together while unread and view tracking run separately", async () => {
+    await showIssue();
+    await screen.findByText("Fix addition");
+    const operations = request.mock.calls.map(([query]) => String(query));
+    const issueRequests = operations.filter((query) => query.includes("query IssueDetail"));
+    expect(issueRequests).toHaveLength(1);
+    for (const field of ["reservation", "ownerApplications", "viewerApplication", "viewerSubmissions"]) {
+      expect(issueRequests[0]).toContain(field + " @include");
+    }
+    expect(operations.filter((query) => query.includes("query UnreadMessages"))).toHaveLength(1);
+    expect(operations.filter((query) => query.includes("mutation RecordIssueView"))).toHaveLength(1);
   });
 
   it("does not warn about missing checks when approved code exists", async () => {
@@ -102,9 +115,8 @@ describe("approving a delivery", () => {
     request.mockImplementation(async (query: string) => {
       if (query.includes("query IssueDetail")) {
         const { issue } = await handler(query) as { issue: object };
-        return { issue: { ...issue, status: "IN_PROGRESS", viewerCapabilities: { canRelease: true }, escrow: { availableActions: [{ action: "releaseFunds", reasonDisabled: null }] } } };
+        return { issue: { ...issue, status: "IN_PROGRESS", viewerCapabilities: { canRelease: true }, escrow: { availableActions: [{ action: "releaseFunds", reasonDisabled: null }] }, viewerSubmissions: [{ id: "submission", status: "SUBMITTED", deliveryHash: null, submittedAt: "2026-11-17T00:00:00Z", developer: { name: "developer", walletAddress: "0x1111111111111111111111111111111111111111" } }] } };
       }
-      if (query.includes("TaskSubmissions")) return { submissions: [{ id: "submission", status: "SUBMITTED", deliveryHash: null, submittedAt: "2026-11-17T00:00:00Z", developer: { name: "developer", walletAddress: "0x1111111111111111111111111111111111111111" } }] };
       return handler(query);
     });
     await showIssue();

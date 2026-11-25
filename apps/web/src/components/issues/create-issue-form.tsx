@@ -8,7 +8,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { ISSUE_CATEGORIES, ISSUE_DIFFICULTY, BOUNTY_MIN_AMOUNT, BOUNTY_MAX_AMOUNT } from "@bloody-roar/shared";
+import { ISSUE_CATEGORIES, ISSUE_DIFFICULTY, BOUNTY_MIN_AMOUNT, BOUNTY_MAX_AMOUNT } from "@bloody-roar/shared/constants";
 import { graphqlRequest } from "@/lib/graphql-client";
 import { useAuthStore } from "@/lib/store/use-auth-store";
 import { Button } from "@/components/ui/button";
@@ -231,24 +231,8 @@ export function CreateIssueForm() {
           <h1 className="h1">Post a bounty</h1>
           <p className="sub">
             Publishing is free and needs no signature. You sign only when you fund a selected developer.
+            By publishing you agree that the developer keeps a non-exclusive licence to reuse their fix.
           </p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span
-            style={{
-              fontSize: "12.5px",
-              color: "var(--ink-3)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            <span className="dot" />
-            Draft ready
-          </span>
-          <button type="button" className="btn btn-o btn-sm">
-            Save draft
-          </button>
         </div>
       </div>
 
@@ -561,14 +545,9 @@ export function CreateIssueForm() {
           <Button asChild variant="outline">
             <Link href="/marketplace">{t("cancel")}</Link>
           </Button>
-          <div style={{ display: "flex", gap: 10 }}>
-            <Button type="button" variant="outline">
-              Save as draft
-            </Button>
-            <Button type="submit" isLoading={saving} disabled={!tokenId || loadingTokens || Boolean(createdId)}>
-              {t("publishBounty")}
-            </Button>
-          </div>
+          <Button type="submit" isLoading={saving} disabled={!tokenId || loadingTokens || Boolean(createdId)}>
+            {t("publishBounty")}
+          </Button>
         </div>
       </form>
     </main>
