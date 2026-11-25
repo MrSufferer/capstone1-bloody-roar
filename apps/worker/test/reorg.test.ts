@@ -112,6 +112,33 @@ test("two-block reorg recovers with no escrow event at the window boundary", asy
   expect((await prisma.chainEvent.findFirstOrThrow({ where: { ...where, txHash: "0xshallow" } })).canonical).toBe(false);
 });
 
+test("a reorg right after the migration rewinds without a false beyond-window alert", async () => {
+  await cleanupChain(prisma, config);
+  const limited = { ...config, escrowDeployBlock: 100n, reorgWindow: 64 };
+  const chain = newChain(); chain.safe = 300n;
+  for (let n = 100n; n <= 300n; n++) chain.blockHash.set(n, `0xA${n}`);
+  chain.logs = [rawLog({ address, block: 300, blockHash: "0xA300", tx: "0xpostmigration" })];
+  await scanToHead({ db: prisma, rpc: fakeRpc(chain), config: limited });
+  await prisma.projectionCheckpoint.update({ where: { chainId_contractAddress: where }, data: { canonicalBlockHashes: {} } });
+  chain.blockHash.set(300n, "0xB300");
+  chain.logs = [];
+  expect(await handleReorg({ db: prisma, rpc: fakeRpc(chain), config: limited })).toEqual({ rewoundTo: 236n });
+  expect((await prisma.projectionCheckpoint.findUniqueOrThrow({ where: { chainId_contractAddress: where } })).reorgAlerted).toBe(false);
+});
+
+test("raising the reorg window across a restart rewinds without a false beyond-window alert", async () => {
+  await cleanupChain(prisma, config);
+  const narrow = { ...config, escrowDeployBlock: 100n, reorgWindow: 2 };
+  const chain = newChain(); chain.safe = 300n;
+  for (let n = 100n; n <= 300n; n++) chain.blockHash.set(n, `0xA${n}`);
+  chain.logs = [rawLog({ address, block: 300, blockHash: "0xA300", tx: "0xwindow" })];
+  await scanToHead({ db: prisma, rpc: fakeRpc(chain), config: narrow });
+  const wide = { ...narrow, reorgWindow: 64 };
+  chain.blockHash.set(300n, "0xB300");
+  chain.logs = [];
+  expect(await handleReorg({ db: prisma, rpc: fakeRpc(chain), config: wide })).toEqual({ rewoundTo: 236n });
+});
+
 test("a reorg beyond the window stops without changing the cursor or events", async () => {
   await cleanupChain(prisma, config);
   const limited = { ...config, reorgWindow: 2, alertWebhookUrl: "https://example.test/alert" };

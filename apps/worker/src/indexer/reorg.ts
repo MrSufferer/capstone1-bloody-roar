@@ -63,13 +63,15 @@ export async function handleReorg({ db, rpc, config }: ScanDeps & { config: Scan
   }
   if (target > floor) {
     const boundary = (checkpoint.canonicalBlockHashes as Record<string, string>)[target.toString()];
-    if (!boundary || boundary.toLowerCase() !== targetHash.toLowerCase()) {
+    // A map built with a smaller window, or emptied by the migration, may not reach the target.
+    // The node hash at the target is authoritative, so a missing entry is unknown, not a deep reorg.
+    if (boundary && boundary.toLowerCase() !== targetHash.toLowerCase()) {
       const claimed = await db.projectionCheckpoint.updateMany({ where: { ...checkpointKey(config).chainId_contractAddress, reorgAlerted: false }, data: { reorgAlerted: true } });
       if (claimed.count) {
         const alerts = evaluateAlerts({ lagSeconds: null, rpcErrorStreak: 0, reorgBeyondWindow: true });
         await sendAlerts(alerts, config.alertWebhookUrl).catch((error: unknown) => console.error("reorg alert webhook failed", error));
       }
-      throw new Error("REORG_BEYOND_WINDOW: boundary hash changed or unavailable; manual recovery required");
+      throw new Error("REORG_BEYOND_WINDOW: boundary hash changed; manual recovery required");
     }
   }
   await db.$transaction(async (tx) => {
