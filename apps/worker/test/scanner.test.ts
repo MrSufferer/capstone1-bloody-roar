@@ -127,4 +127,20 @@ test("successive ticks reuse verified block hashes and refresh the window after 
   expect((await cursor()).canonicalBlockHashes).toMatchObject({ "171": "0xchanged171" });
 });
 
+test("a migrated checkpoint with an empty hash map indexes without a reorg alert", async () => {
+  await cleanupChain(prisma, config);
+  const chain = chainUpTo(170n);
+  const rpc = fakeRpc(chain);
+  const ctx = { db: prisma, rpc, config, now: () => new Date(), log: { info() {}, warn() {}, error() {} } } as JobContext;
+  await indexerJob.run(ctx);
+  expect(await cursor()).toMatchObject({ lastScannedBlock: 170n, lastCanonicalBlockHash: "0xh170", reorgAlerted: false });
+  await prisma.projectionCheckpoint.update({ where: { chainId_contractAddress: where }, data: { canonicalBlockHashes: {} } });
+  chain.safe = 171n; chain.blockHash.set(171n, "0xh171");
+  await indexerJob.run(ctx);
+  const after = await cursor();
+  expect(after).toMatchObject({ lastScannedBlock: 171n, lastCanonicalBlockHash: "0xh171", reorgAlerted: false });
+  expect(Object.keys(after.canonicalBlockHashes as Record<string, string>)).toHaveLength(65);
+  expect(after.canonicalBlockHashes).toMatchObject({ "107": "0xh107", "171": "0xh171" });
+});
+
 });
