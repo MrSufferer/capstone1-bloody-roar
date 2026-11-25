@@ -12,6 +12,7 @@ import { createLogger } from "../lib/logger";
 import { tokenFromCookieHeader, verifyJWT } from "../lib/auth";
 import { accessibleConversation, workConversation } from "../lib/conversations";
 import { saveConversationMessage, enforceMessageRate } from "../lib/chat-messages";
+import { canReadConversation } from "../lib/chat-access";
 
 const log = createLogger("socket.io");
 type StoredMessage = Prisma.MessageGetPayload<{
@@ -117,7 +118,7 @@ export function registerSocketHandlers(
         const room = data.conversationId ? await accessibleConversation(prisma, data.conversationId, user, true) : await prisma.$transaction((tx) => workConversation(tx, data.issueId, user));
         if (!socket.rooms.has(`conv:${room.id}`) && !(room.kind === "ISSUE_WORK" && socket.rooms.has(`task:${room.issueId}`))) return callback?.("Join this task room before sending a message");
         const result = await saveConversationMessage(prisma, user, { ...data, conversationId: room.id });
-        broadcastConversationMessage(io, result);
+        await broadcastConversationMessage(io, result);
         callback?.();
       } catch (error) {
         log.error({ error }, "Failed to process message");
@@ -156,7 +157,12 @@ export function disconnectUserSockets(userId: string): void {
   getSocketIO().in(`user:${userId}`).disconnectSockets(true);
 }
 
-export function broadcastConversationMessage(io: Server<ClientToServerEvents, ServerToClientEvents>, result: Awaited<ReturnType<typeof saveConversationMessage>>) {
+export async function broadcastConversationMessage(io: Server<ClientToServerEvents, ServerToClientEvents>, result: Awaited<ReturnType<typeof saveConversationMessage>>) {
+  const { room } = result;
+  for (const socket of await io.in(`conv:${room.id}`).fetchSockets()) {
+    const user = socket.data.user;
+    if (!user || !canReadConversation(room, room.issue, room.application, user, room.participants.some((p) => p.userId === user.id))) socket.leave(`conv:${room.id}`);
+  }
   io.to(`conv:${result.room.id}`).emit("message:new", toMessagePayload(result.message, result.message.sender));
   if (!result.duplicate) for (const member of result.room.participants.filter((p) => p.userId !== result.message.senderId)) {
     io.to(`user:${member.userId}`).emit("inbox:update", { conversationId: result.room.id, lastMessageAt: result.message.createdAt.toISOString(), unreadDelta: 1 });
