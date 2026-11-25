@@ -97,7 +97,7 @@ builder.mutationField("sendMessage", (t) => t.field({
     const room = await accessibleConversation(ctx.db, String(args.conversationId), user, true);
     const data = Object.fromEntries(Object.entries(args).filter(([, v]) => v != null));
     const result = await saveConversationMessage(ctx.db, user, { ...data, issueId: room.issueId });
-    try { broadcastConversationMessage(getSocketIO(), result); } catch { /* HTTP-only deployments still persist messages. */ }
+    try { await broadcastConversationMessage(getSocketIO(), result); } catch { /* HTTP-only deployments still persist messages. */ }
     return result.message;
   },
 }));

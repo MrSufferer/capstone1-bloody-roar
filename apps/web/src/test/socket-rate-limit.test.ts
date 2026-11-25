@@ -38,6 +38,7 @@ function connectSocket() {
       if (event === "connection") onConnection = handler;
     }),
     to: vi.fn(() => ({ emit: vi.fn() })),
+    in: () => ({ fetchSockets: async () => [] }),
   };
   registerSocketHandlers(io as unknown as Server);
 

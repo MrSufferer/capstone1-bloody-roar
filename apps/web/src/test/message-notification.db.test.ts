@@ -25,7 +25,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("message notifications on Postgr
     otherIssueId = (await prisma.issue.create({ data: { title: "Other notification", description: "Second notification fixture", category: "BUG_FIX", clientId: client.id, developerId: developer.id, status: "IN_PROGRESS", tokenId, bountyAmount: "100" } })).id;
     auth.user = client;
     let connection: ((socket: unknown) => void) | undefined;
-    const io = { use: vi.fn(), on: (_event: string, handler: (socket: unknown) => void) => { connection = handler; }, to: () => ({ emit: vi.fn() }) };
+    const io = { use: vi.fn(), on: (_event: string, handler: (socket: unknown) => void) => { connection = handler; }, to: () => ({ emit: vi.fn() }), in: () => ({ fetchSockets: async () => [] }) };
     registerSocketHandlers(io as unknown as Server);
     const listeners = new Map<string, (...args: unknown[]) => unknown>();
     connection?.({ id: "test", data: { token: "test" }, rooms: new Set([`task:${issueId}`, `task:${otherIssueId}`]), on: (event: string, handler: (...args: unknown[]) => unknown) => listeners.set(event, handler) });
