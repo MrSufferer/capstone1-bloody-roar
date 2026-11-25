@@ -168,6 +168,7 @@ enum AttachmentPurpose {
 enum AttachmentStatus {
   PENDING
   ATTACHED
+  REJECTED
 }
 
 enum AttestationType {

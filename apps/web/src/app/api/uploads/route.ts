@@ -4,7 +4,7 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { ALLOWED_FILE_TYPES, MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
+import { ALLOWED_FILE_TYPES, CHAT_FILE_TYPES, CHAT_MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
 import { tokenFromRequest, verifyJWT } from "@/lib/auth";
 import { prisma, type AttachmentPurpose } from "@bloody-roar/database";
 import { accessibleConversation } from "@/lib/conversations";
@@ -73,6 +73,12 @@ export async function POST(request: Request) {
 
   if (purpose === "AVATAR" && (!["image/webp", "image/jpeg", "image/png"].includes(fileType) || fileSize > PROFILE_AVATAR_MAX_BYTES)) {
     return NextResponse.json({ error: "Avatars must be a JPG, PNG or WebP image up to 256 KB" }, { status: 400 });
+  }
+  if (purpose === "CHAT" && !CHAT_FILE_TYPES.includes(fileType as never)) {
+    return NextResponse.json({ error: "This file type can't be sent in chat", code: "FILE_TYPE_NOT_ALLOWED" }, { status: 400 });
+  }
+  if (purpose === "CHAT" && fileSize > CHAT_MAX_FILE_SIZE_BYTES) {
+    return NextResponse.json({ error: "Chat files must be 10 MB or smaller", code: "FILE_TOO_LARGE" }, { status: 400 });
   }
 
   // Delivery and evidence belong to one task; only its client or developer may attach them.

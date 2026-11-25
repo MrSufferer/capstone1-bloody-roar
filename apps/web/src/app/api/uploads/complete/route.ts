@@ -1,8 +1,11 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { NextResponse } from "next/server";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { prisma } from "@bloody-roar/database";
+import { CHAT_FILE_TYPES, CHAT_MAX_FILE_SIZE_BYTES } from "@bloody-roar/shared";
+import { scanAndMask } from "@/ai/guard/scanner";
 import { clearAuthCache, tokenFromRequest, verifyJWT } from "@/lib/auth";
 import { getS3Storage, localUploadPath } from "@/lib/storage";
 
@@ -20,6 +23,27 @@ async function readStoredBytes(key: string): Promise<Uint8Array | null> {
   const localPath = localUploadPath(key);
   if (!localPath) return null;
   return readFile(localPath.destination).then((bytes) => new Uint8Array(bytes)).catch(() => null);
+}
+
+const SIGNATURES: Record<string, (head: string) => boolean> = {
+  "image/jpeg": (head) => head.startsWith("\xff\xd8\xff"),
+  "image/png": (head) => head.startsWith("\x89PNG\r\n\x1a\n"),
+  "image/gif": (head) => /^GIF8[79]a/.test(head),
+  "image/webp": (head) => head.startsWith("RIFF") && head.slice(8, 12) === "WEBP",
+  "application/pdf": (head) => head.startsWith("%PDF-"),
+};
+const NOT_SECRET = new Set(["email", "vietnamese-phone", "us-phone"]);
+
+function chatRejection(mime: string, bytes: Uint8Array, fileName: string) {
+  if (!CHAT_FILE_TYPES.includes(mime as never)) return { error: "This file type can't be sent in chat", code: "FILE_TYPE_NOT_ALLOWED" };
+  if (bytes.byteLength > CHAT_MAX_FILE_SIZE_BYTES) return { error: "Chat files must be 10 MB or smaller", code: "FILE_TOO_LARGE" };
+  const signature = SIGNATURES[mime];
+  const matchesType = signature ? signature(Buffer.from(bytes.subarray(0, 12)).toString("latin1")) : isUtf8(bytes) && !bytes.includes(0);
+  if (!matchesType) return { error: "The file content doesn't match its type", code: "FILE_CONTENT_MISMATCH" };
+  const secret = [signature ? "" : new TextDecoder().decode(bytes), fileName]
+    .map((text) => scanAndMask(text).matches.find((match) => !NOT_SECRET.has(match)))
+    .find(Boolean);
+  return secret ? { error: `This file contains a secret (${secret}) and can't be sent in chat`, code: "FILE_CONTAINS_SECRET" } : null;
 }
 
 // Step two of an upload: confirm the bytes arrived at the declared size, then record their SHA-256.
@@ -50,6 +74,16 @@ export async function POST(request: Request) {
   // A short or oversized file keeps the attachment PENDING so the client can upload it again.
   if (bytes.byteLength !== attachment.fileSize)
     return NextResponse.json({ error: "Stored file size does not match the declared size" }, { status: 400 });
+
+  const rejection = attachment.purpose === "CHAT" ? chatRejection(attachment.fileMime, bytes, attachment.fileName) : null;
+  if (rejection) {
+    const s3 = getS3Storage();
+    const localPath = localUploadPath(key);
+    if (s3) await s3.client.send(new DeleteObjectCommand({ Bucket: s3.bucket, Key: key }));
+    else if (localPath) await unlink(localPath.destination).catch(() => undefined);
+    await prisma.attachment.update({ where: { id: attachment.id }, data: { status: "REJECTED" } });
+    return NextResponse.json(rejection, { status: 422 });
+  }
 
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   await prisma.$transaction([
