@@ -40,8 +40,10 @@ export function bpsOf(amount: bigint, bps: number): bigint {
   return (amount * BigInt(bps)) / BPS_DENOMINATOR;
 }
 
-// Theo _resolve trong BloodyRoarEscrow.sol: phần Client không chịu phí. Phí 2,5% chỉ tính trên phần Developer (QĐ-02).
-// clientBps mặc định 0 (release): Developer nhận principal trừ phí.
+export function depositTotal(principal: bigint, feeBps: number): bigint {
+  return principal + bpsOf(principal, feeBps);
+}
+
 export function splitPayout(
   principal: bigint,
   feeBps: number,
@@ -49,7 +51,8 @@ export function splitPayout(
 ): { developer: bigint; fee: bigint; client: bigint } {
   assertBps(feeBps);
   assertBps(clientBps);
-  const client = bpsOf(principal, clientBps);
-  const fee = bpsOf(principal - client, feeBps);
-  return { developer: principal - client - fee, fee, client };
+  const clientShare = bpsOf(principal, clientBps);
+  const developer = principal - clientShare;
+  const fee = bpsOf(developer, feeBps);
+  return { developer, fee, client: clientShare + bpsOf(principal, feeBps) - fee };
 }

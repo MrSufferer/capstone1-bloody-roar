@@ -1,5 +1,3 @@
-import { buildJWT } from "@thirdweb-dev/auth";
-import { PrivateKeyWallet } from "@thirdweb-dev/wallets";
 
 export type SiweLoginPayload = {
   domain: string;
@@ -56,23 +54,4 @@ export function authUri(rawUrl?: string): string {
 
 export function authDomain(rawUrl?: string): string {
   return new URL(authUri(rawUrl)).host;
-}
-
-export async function issueAuthToken(walletAddress: string): Promise<string> {
-  const privateKey = process.env.AUTH_PRIVATE_KEY;
-  if (!privateKey) {
-    throw new Error("AUTH_PRIVATE_KEY is not configured");
-  }
-  const wallet = new PrivateKeyWallet(privateKey);
-  return buildJWT({
-    wallet,
-    payload: {
-      iss: await wallet.getAddress(),
-      sub: walletAddress,
-      aud: authDomain(),
-      nbf: new Date(),
-      exp: new Date(Date.now() + 1000 * 60 * 60 * 24),
-      iat: new Date(),
-    },
-  });
 }

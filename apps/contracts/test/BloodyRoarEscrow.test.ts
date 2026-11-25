@@ -4,6 +4,8 @@ import { time } from "@nomicfoundation/hardhat-network-helpers";
 import type { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import type { BloodyRoarEscrow, MockUSDC } from "../typechain-types";
 import { SAFE_V141_SINGLETONS, assertProductionSafes } from "../scripts/deployment-checks";
+// The off-chain split the app and the fold use; the settlement test below checks the contract against it.
+import { depositTotal, splitPayout } from "../../../packages/shared/src/money";
 
 const DAY = 24 * 60 * 60;
 const USDC = (value: string | number | bigint) => ethers.parseUnits(value.toString(), 6);
@@ -224,8 +226,10 @@ describe("BloodyRoarEscrow", () => {
       expect(e.amount).to.equal(USDC(1_000));
       expect(e.deliveryDeadline).to.equal(deadline);
       expect(e.termsHash).to.equal(hash("terms:one"));
-      expect(await escrow.totalUnresolvedPrincipal()).to.equal(USDC(1_000));
-      expect(await escrow.accountedBalance()).to.equal(USDC(1_000));
+      // The client pays the bounty plus the 10% platform fee on top.
+      expect(await escrow.totalUnresolvedPrincipal()).to.equal(USDC(1_100));
+      expect(await escrow.accountedBalance()).to.equal(USDC(1_100));
+      expect(await token.balanceOf(client.address)).to.equal(USDC(1_000_000 - 1_100));
       expect(await escrow.isSolvent()).to.equal(true);
       await expect(deposit("one")).to.be.revertedWithCustomError(escrow, "EscrowAlreadyExists");
     });
@@ -310,14 +314,14 @@ describe("BloodyRoarEscrow", () => {
       await escrow.connect(developer).submitWork("release", hash("delivery"));
       await expect(escrow.connect(client).releaseFunds("release", hash("delivery")))
         .to.emit(escrow, "EscrowResolved")
-        .withArgs("release", 1, 0, 99, 2, ethers.ZeroHash);
+        .withArgs("release", 1, 0, 101, 10, ethers.ZeroHash);
       expect(await token.balanceOf(developer.address)).to.equal(0);
-      expect(await escrow.claimable(developer.address)).to.equal(99);
-      expect(await escrow.claimable(feeRecipient.address)).to.equal(2);
+      expect(await escrow.claimable(developer.address)).to.equal(101);
+      expect(await escrow.claimable(feeRecipient.address)).to.equal(10);
       expect(await escrow.totalUnresolvedPrincipal()).to.equal(0);
-      expect(await escrow.totalClaimable()).to.equal(101);
+      expect(await escrow.totalClaimable()).to.equal(111);
       await escrow.connect(outsider).claim(developer.address);
-      expect(await token.balanceOf(developer.address)).to.equal(99);
+      expect(await token.balanceOf(developer.address)).to.equal(101);
       await expect(escrow.claim(developer.address)).to.be.revertedWithCustomError(escrow, "NothingToClaim");
     });
 
@@ -330,7 +334,7 @@ describe("BloodyRoarEscrow", () => {
       );
       await time.setNextBlockTimestamp(deadline + 1n);
       await escrow.connect(outsider).claimMissedDeliveryRefund("missed");
-      expect(await escrow.claimable(client.address)).to.equal(USDC(100));
+      expect(await escrow.claimable(client.address)).to.equal(USDC(110));
       expect(await escrow.claimable(feeRecipient.address)).to.equal(0);
     });
 
@@ -346,8 +350,8 @@ describe("BloodyRoarEscrow", () => {
       );
       await time.setNextBlockTimestamp(reviewDeadline);
       await escrow.connect(outsider).claimReviewTimeout("review");
-      expect(await escrow.claimable(developer.address)).to.equal(USDC(97.5));
-      expect(await escrow.claimable(feeRecipient.address)).to.equal(USDC(2.5));
+      expect(await escrow.claimable(developer.address)).to.equal(USDC(100));
+      expect(await escrow.claimable(feeRecipient.address)).to.equal(USDC(10));
     });
 
     it("resets the review window on resubmission and can resolve before the delivery deadline", async () => {
@@ -360,28 +364,26 @@ describe("BloodyRoarEscrow", () => {
       await expect(escrow.claimReviewTimeout("resubmit-review")).to.be.revertedWithCustomError(escrow, "ReviewWindowNotReached");
       await time.setNextBlockTimestamp(first + 9 * DAY);
       await escrow.connect(outsider).claimReviewTimeout("resubmit-review");
-      expect(await escrow.claimable(developer.address)).to.equal(USDC(97.5));
+      expect(await escrow.claimable(developer.address)).to.equal(USDC(100));
     });
 
-    for (const clientBps of [0n, 1n, 5_000n, 9_999n, 10_000n]) {
+    for (const clientBps of [0n, 1n, 1_234n, 5_000n, 9_999n, 10_000n]) {
       it(`conserves every unit for a ${clientBps} bps mutual settlement`, async () => {
         const id = `settlement-${clientBps}`;
         const amount = 1_000_003n;
         await deposit(id, amount);
         await escrow.connect(client).proposeSettlement(id, clientBps);
         await escrow.connect(developer).acceptSettlement(id);
-        const clientAmount = (amount * clientBps) / 10_000n;
-        const developerGross = amount - clientAmount;
-        const fee = (developerGross * 250n) / 10_000n;
-        const developerAmount = amount - clientAmount - fee;
+        const fee = Number(await escrow.PLATFORM_FEE_BPS());
+        const split = splitPayout(amount, fee, Number(clientBps));
         expect(
           (await escrow.claimable(client.address)) +
             (await escrow.claimable(developer.address)) +
             (await escrow.claimable(feeRecipient.address)),
-        ).to.equal(amount);
-        expect(await escrow.claimable(client.address)).to.equal(clientAmount);
-        expect(await escrow.claimable(developer.address)).to.equal(developerAmount);
-        expect(await escrow.claimable(feeRecipient.address)).to.equal(fee);
+        ).to.equal(depositTotal(amount, fee));
+        expect(await escrow.claimable(client.address)).to.equal(split.client);
+        expect(await escrow.claimable(developer.address)).to.equal(split.developer);
+        expect(await escrow.claimable(feeRecipient.address)).to.equal(split.fee);
       });
     }
 
@@ -426,7 +428,7 @@ describe("BloodyRoarEscrow", () => {
       await token.setBlocked(client.address, true);
       await expect(escrow.connect(outsider).claim(client.address)).to.be.revertedWith("blocked");
       await expect(escrow.connect(outsider).claim(developer.address)).to.not.be.reverted;
-      expect(await escrow.claimable(client.address)).to.equal(USDC(50));
+      expect(await escrow.claimable(client.address)).to.equal(USDC(55));
 
       await token.setBlocked(client.address, false);
       await token.setFee(100, outsider.address);
@@ -434,7 +436,7 @@ describe("BloodyRoarEscrow", () => {
         escrow,
         "RecipientBalanceMismatch",
       );
-      expect(await escrow.claimable(client.address)).to.equal(USDC(50));
+      expect(await escrow.claimable(client.address)).to.equal(USDC(55));
     });
   });
 
@@ -698,7 +700,7 @@ describe("BloodyRoarEscrow", () => {
       await deposit("solvency-a", USDC(100));
       await token.burn(await escrow.getAddress(), 1);
       await expect(deposit("solvency-b", USDC(1))).to.be.revertedWithCustomError(escrow, "Insolvent");
-      expect(await escrow.totalUnresolvedPrincipal()).to.equal(USDC(100));
+      expect(await escrow.totalUnresolvedPrincipal()).to.equal(USDC(110));
     });
 
     it("keeps unresolved principal plus credits equal to deposited units", async () => {
@@ -706,14 +708,14 @@ describe("BloodyRoarEscrow", () => {
       await deposit("b", USDC(20));
       await escrow.connect(developer).submitWork("a", hash("a"));
       await escrow.connect(client).releaseFunds("a", hash("a"));
-      expect(await escrow.totalUnresolvedPrincipal()).to.equal(USDC(20));
-      expect(await escrow.totalClaimable()).to.equal(USDC(10));
-      expect(await escrow.accountedBalance()).to.equal(USDC(30));
-      expect(await token.balanceOf(await escrow.getAddress())).to.equal(USDC(30));
+      expect(await escrow.totalUnresolvedPrincipal()).to.equal(USDC(22));
+      expect(await escrow.totalClaimable()).to.equal(USDC(11));
+      expect(await escrow.accountedBalance()).to.equal(USDC(33));
+      expect(await token.balanceOf(await escrow.getAddress())).to.equal(USDC(33));
       await escrow.claim(developer.address);
       await escrow.claim(feeRecipient.address);
-      expect(await escrow.accountedBalance()).to.equal(USDC(20));
-      expect(await token.balanceOf(await escrow.getAddress())).to.equal(USDC(20));
+      expect(await escrow.accountedBalance()).to.equal(USDC(22));
+      expect(await token.balanceOf(await escrow.getAddress())).to.equal(USDC(22));
     });
 
     it("prevents double allocation and irreversible terminal transitions", async () => {
