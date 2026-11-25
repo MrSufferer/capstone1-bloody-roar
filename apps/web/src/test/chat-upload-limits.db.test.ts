@@ -45,13 +45,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
   const start = (fileType: string, fileSize: number, purpose = "CHAT") =>
     presign(post("http://localhost/api/uploads", { fileName: "file.bin", fileType, fileSize, purpose, conversationId }));
 
-  const stored = async (fileMime: string, bytes: Uint8Array) => {
+  const stored = async (fileMime: string, bytes: Uint8Array, fileName = "file.bin") => {
     const key = `${client.id}/${randomBytes(8).toString("hex")}-file.bin`;
     const destination = localUploadPath(key)!.destination;
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, bytes);
     const attachment = await prisma.attachment.create({
-      data: { issueId, conversationId, uploaderId: client.id, fileName: "file.bin", fileUrl: `http://localhost/api/uploads?key=${encodeURIComponent(key)}`, fileSize: bytes.byteLength, fileMime, purpose: "CHAT", status: "PENDING" },
+      data: { issueId, conversationId, uploaderId: client.id, fileName, fileUrl: `http://localhost/api/uploads?key=${encodeURIComponent(key)}`, fileSize: bytes.byteLength, fileMime, purpose: "CHAT", status: "PENDING" },
     });
     return { id: attachment.id, destination };
   };
@@ -127,6 +127,52 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
       const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
       expect(response.status, mime).toBe(200);
       expect((await prisma.attachment.findUniqueOrThrow({ where: { id } })).status).toBe("ATTACHED");
+    }
+  });
+
+  it("rejects chat text files and file names holding a secret with FILE_CONTAINS_SECRET without echoing it", async () => {
+    const key = `0x${randomBytes(32).toString("hex")}`;
+    const cases: [string, string, string, string][] = [
+      ["text/plain", `deployer key ${key}`, "notes.txt", "evm-private-key"],
+      ["text/markdown", "DATABASE_URL=postgresql://admin:hunter2pass@db.example.com:5432/prod", "setup.md", "database-url"],
+      ["image/png", "\x89PNG\r\n\x1a\n", `${key}.png`, "evm-private-key"],
+    ];
+    for (const [mime, content, fileName, kind] of cases) {
+      const { id, destination } = await stored(mime, new Uint8Array(Buffer.from(content, "latin1")), fileName);
+      const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
+      const body = await response.json();
+      expect(response.status, fileName).toBe(422);
+      expect(body).toMatchObject({ code: "FILE_CONTAINS_SECRET" });
+      expect(body.error).toContain(kind);
+      expect(JSON.stringify(body)).not.toContain(key);
+      expect(JSON.stringify(body)).not.toContain("hunter2pass");
+      expect((await prisma.attachment.findUniqueOrThrow({ where: { id } })).status).toBe("REJECTED");
+      expect(existsSync(destination)).toBe(false);
+    }
+  });
+
+  it("attaches chat text files that only mention an email or phone number", async () => {
+    const { id } = await stored("text/plain", new TextEncoder().encode("reach me at dev@example.com or 0912345678"), "contact.txt");
+    const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
+    expect(response.status).toBe(200);
+    expect((await prisma.attachment.findUniqueOrThrow({ where: { id } })).status).toBe("ATTACHED");
+  });
+
+  it("scans a 10 MB chat text file in under a second, even when it is all seed-phrase words", async () => {
+    const cases: [string, number][] = [
+      ["const total = items.reduce((sum, item) => sum + item.price, 0);\n", 200],
+      ["abandon ability able about above absent absorb abstract absurd abuse access accident\n", 422],
+    ];
+    for (const [text, status] of cases) {
+      const line = new TextEncoder().encode(text);
+      const bytes = new Uint8Array(10 * MB);
+      for (let offset = 0; offset + line.length <= bytes.length; offset += line.length) bytes.set(line, offset);
+      bytes.fill(10, bytes.length - (bytes.length % line.length));
+      const { id } = await stored("text/plain", bytes);
+      const startedAt = performance.now();
+      const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
+      expect(response.status, text).toBe(status);
+      expect(performance.now() - startedAt, text).toBeLessThan(1000);
     }
   });
 

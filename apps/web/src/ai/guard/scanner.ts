@@ -33,6 +33,7 @@ export interface GuardResult {
 
 const BIP39_WORDS = new Set<string>(wordlist);
 const SEED_PHRASE_LENGTHS = [12, 15, 18, 21, 24];
+const MAX_SEED_PHRASE_CHECKS = 1_000;
 
 // A run of 12-24 BIP-39 words only counts when its checksum is valid, so ordinary prose is not masked.
 function maskSeedPhrases(content: string): { content: string; matched: boolean } {
@@ -42,8 +43,9 @@ function maskSeedPhrases(content: string): { content: string; matched: boolean }
     end: (match.index ?? 0) + match[0].length,
   }));
   const spans: Array<[number, number]> = [];
+  let checks = 0;
 
-  for (let i = 0; i < tokens.length; i++) {
+  for (let i = 0; i < tokens.length && checks < MAX_SEED_PHRASE_CHECKS; i++) {
     for (const length of SEED_PHRASE_LENGTHS) {
       const window = tokens.slice(i, i + length);
       const [first] = window;
@@ -51,6 +53,7 @@ function maskSeedPhrases(content: string): { content: string; matched: boolean }
       if (!first || !last || window.length < length || !window.every((token) => BIP39_WORDS.has(token.word.toLowerCase()))) break;
       // Only letters and whitespace between the first and last word means the run is contiguous.
       if (!/^[A-Za-z\s]+$/.test(content.slice(first.start, last.end))) continue;
+      checks++;
       if (!validateMnemonic(window.map((token) => token.word.toLowerCase()).join(" "), wordlist)) continue;
       spans.push([first.start, last.end]);
       i += length - 1;
@@ -58,9 +61,12 @@ function maskSeedPhrases(content: string): { content: string; matched: boolean }
     }
   }
 
-  let masked = content;
-  for (const [start, end] of spans.reverse()) masked = masked.slice(0, start) + "[REDACTED]" + masked.slice(end);
-  return { content: masked, matched: spans.length > 0 };
+  let masked = "", cursor = 0;
+  for (const [start, end] of spans) {
+    masked += content.slice(cursor, start) + "[REDACTED]";
+    cursor = end;
+  }
+  return { content: masked + content.slice(cursor), matched: spans.length > 0 };
 }
 
 export function scanAndMask(content: string): GuardResult {
