@@ -13,7 +13,8 @@ const nextConfig = (phase) => ({
   // External packages that should not be bundled by Next.js
   // (they're used in the custom server, not in the browser)
   experimental: {
-    serverComponentsExternalPackages: ["pino", "pino-pretty", "socket.io"],
+    serverComponentsExternalPackages: ["pino", "pino-pretty", "socket.io", "@thirdweb-dev/auth", "@thirdweb-dev/wallets", "@thirdweb-dev/sdk", "ethers"],
+    optimizePackageImports: ["thirdweb/wallets/in-app"],
     // Container builds set NEXT_BUILD_CPUS to cap parallel workers and avoid OOM kills.
     ...(process.env.NEXT_BUILD_CPUS && { cpus: Number(process.env.NEXT_BUILD_CPUS) }),
   },
@@ -47,6 +48,13 @@ const nextConfig = (phase) => ({
       fs: false,
       net: false,
       tls: false,
+    };
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "@x402/core": false,
+      "@x402/evm": false,
+      "@x402/svm": false,
+      "@x402/extensions": false,
     };
     return config;
   },

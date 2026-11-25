@@ -2,7 +2,7 @@ import { ApplicationStatus, IssueStatus, Prisma, ReservationStatus, UserRole } f
 import { z } from "zod";
 import { builder } from "../../builder";
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "@bloody-roar/shared";
-import { requireAuth } from "../../context";
+import { requireAuth, type GraphQLContext } from "../../context";
 import { gqlError, parseOrThrow } from "../../errors";
 import { createNotificationSafely } from "../../../lib/services/notifications";
 import { guardMessage } from "../../../ai/guard/service";
@@ -26,6 +26,7 @@ export const ApplicationRef = builder.prismaObject("Application", {
     message: t.exposeString("message", { nullable: true }),
     issueId: t.exposeString("issueId"),
     developerId: t.exposeString("developerId"),
+    reuseOfIssueId: t.exposeString("reuseOfIssueId", { nullable: true }),
     createdAt: t.string({
       resolve: (application) => application.createdAt.toISOString(),
     }),
@@ -43,7 +44,35 @@ export const ApplicationRef = builder.prismaObject("Application", {
 const ApplySchema = z.object({
   issueId: z.string().min(1),
   message: z.string().trim().max(1000).optional(),
+  reuseOfIssueId: z.string().min(1).max(191).optional(),
 });
+
+function issueApplications(db: GraphQLContext["db"], issueId: string, take = DEFAULT_PAGE_SIZE, cursor?: string | null, query: object = {}) {
+  return db.application.findMany({
+    ...query,
+    where: { issueId }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: APPLICATION_INCLUDE,
+  });
+}
+
+builder.prismaObjectFields(IssueRef, (t) => ({
+  ownerApplications: t.field({
+    type: [ApplicationRef],
+    resolve: (issue, _args, ctx) => ctx.user?.id === issue.clientId ? issueApplications(ctx.db, issue.id) : [],
+  }),
+  viewerApplication: t.field({
+    type: ApplicationRef,
+    nullable: true,
+    resolve: (issue, _args, ctx) => {
+      const user = ctx.user;
+      if (!user || user.role === "ADMIN" || user.id === issue.clientId) return null;
+      return ctx.db.application.findUnique({
+        where: { issueId_developerId: { issueId: issue.id, developerId: user.id } },
+        include: APPLICATION_INCLUDE,
+      });
+    },
+  }),
+}));
 
 builder.queryFields((t) => ({
   applications: t.prismaField({
@@ -62,9 +91,7 @@ builder.queryFields((t) => ({
       const cursor = page.after ? decodeCursor(page.after) : null;
       if (cursor && !await ctx.db.application.findFirst({ where: { id: cursor, issueId: args.issueId }, select: { id: true } }))
         throw gqlError("Cursor does not belong to this applicant list", "INVALID_CURSOR");
-      return ctx.db.application.findMany({ ...query, where: { issueId: args.issueId },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: page.first ?? DEFAULT_PAGE_SIZE,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), include: APPLICATION_INCLUDE });
+      return issueApplications(ctx.db, args.issueId, page.first ?? DEFAULT_PAGE_SIZE, cursor, query);
     },
   }),
   myApplications: t.prismaField({
@@ -88,6 +115,7 @@ builder.mutationField("applyToIssue", (t) =>
     input: {
       issueId: t.input.id({ required: true }),
       message: t.input.string({ required: false }),
+      reuseOfIssueId: t.input.id({ required: false, description: "US-108: a COMPLETED issue you fixed that matches this one; applies at the reuse price" }),
     },
     resolve: async (_root, args, ctx) => {
       const user = requireAuth(ctx);
@@ -96,6 +124,7 @@ builder.mutationField("applyToIssue", (t) =>
       const input = parseOrThrow(ApplySchema, {
         issueId: String(args.input.issueId),
         ...(args.input.message != null ? { message: args.input.message } : {}),
+        ...(args.input.reuseOfIssueId != null ? { reuseOfIssueId: String(args.input.reuseOfIssueId) } : {}),
       });
       const message = input.message?.trim() ? (await guardMessage(input.message.trim(), { issueId: input.issueId })).content : null;
       let result: {
@@ -131,6 +160,19 @@ builder.mutationField("applyToIssue", (t) =>
             if (previous && previous.status !== ApplicationStatus.WITHDRAWN) {
               throw gqlError("You already applied to this bounty", "ALREADY_APPLIED");
             }
+            if (input.reuseOfIssueId) {
+              const [reused, similar] = await Promise.all([
+                tx.issue.findUnique({ where: { id: input.reuseOfIssueId }, select: { developerId: true, status: true } }),
+                tx.issueSimilarity.findUnique({ where: { issueId_similarIssueId: { issueId: issue.id, similarIssueId: input.reuseOfIssueId } }, select: { developerId: true } }),
+              ]);
+              if (!reused || reused.developerId !== user.id)
+                throw gqlError("Only the developer who fixed that issue can reuse it", "REUSE_NOT_ALLOWED");
+              if (reused.status !== IssueStatus.COMPLETED)
+                throw gqlError("The reused issue is not completed", "REUSE_NOT_ALLOWED");
+              if (similar?.developerId !== user.id)
+                throw gqlError("That issue was not matched to this bounty", "REUSE_NOT_ALLOWED");
+            }
+            const reuseOfIssueId = input.reuseOfIssueId ?? null;
 
             const application = previous
               ? await tx.application.update({
@@ -138,6 +180,7 @@ builder.mutationField("applyToIssue", (t) =>
                   data: {
                     status: ApplicationStatus.PENDING,
                     message,
+                    reuseOfIssueId,
                   },
                   include: APPLICATION_INCLUDE,
                 })
@@ -146,6 +189,7 @@ builder.mutationField("applyToIssue", (t) =>
                     issueId: input.issueId,
                     developerId: user.id,
                     message,
+                    reuseOfIssueId,
                   },
                   include: APPLICATION_INCLUDE,
                 });
