@@ -39,4 +39,16 @@ describe("chat catch up (US-88)", () => {
     await catchUp(Promise.reject(new GraphQLRequestError({ message: "Too many AI requests", extensions: { code: "RATE_LIMITED" } })));
     expect(screen.getByRole("alert")).toHaveTextContent("Too many AI requests");
   });
+
+  it("announces results in a live region and marks the button busy while loading", async () => {
+    let resolve: (value: unknown) => void = () => {};
+    await catchUp(new Promise((r) => { resolve = r; }));
+    const button = screen.getByRole("button", { name: /Catching up/ });
+    expect(button).toHaveAttribute("aria-busy", "true");
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    await act(async () => { resolve({ summarizeConversation: { status: "EMPTY", summary: null, messageCount: 0 } }); });
+    expect(live).toHaveTextContent("You're all caught up");
+    expect(screen.getByRole("button", { name: "Catch up" })).toHaveAttribute("aria-busy", "false");
+  });
 });

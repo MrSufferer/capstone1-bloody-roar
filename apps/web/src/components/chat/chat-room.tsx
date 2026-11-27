@@ -102,7 +102,7 @@ export function ChatRoom({
   conversationId: string;
   issueTitle?: string;
   readOnly?: boolean;
-  kind?: string;
+  kind?: "ISSUE_WORK" | "APPLICATION";
 }) {
   const user = useAuthStore((state) => state.user);
   const [socket, setSocket] = useState<Socket | null>(null);

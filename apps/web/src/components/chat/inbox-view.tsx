@@ -10,7 +10,7 @@ import { AuthRequiredPanel } from "@/components/auth/auth-required-panel";
 import { Button } from "@/components/ui/button";
 import { ChatRoom } from "./chat-room";
 
-type Conversation = { id: string; kind: string; issueId: string; issue: { title: string }; counterpart: { name: string | null; walletAddress: string } | null; lastMessage: { content: string } | null; lastMessageAt: string | null; unreadCount: number; canWrite: boolean };
+type Conversation = { id: string; kind: "ISSUE_WORK" | "APPLICATION"; issueId: string; issue: { title: string }; counterpart: { name: string | null; walletAddress: string } | null; lastMessage: { content: string } | null; lastMessageAt: string | null; unreadCount: number; canWrite: boolean };
 const QUERY = `query Inbox($after: ID) { myConversations(first: 30, after: $after) { id kind issueId issue { title } counterpart { name walletAddress } lastMessage { content } lastMessageAt unreadCount canWrite } }`;
 export function InboxView() {
   const authStore = useAuthStoreApi();

@@ -25,17 +25,19 @@ export function ChatCatchUp({ conversationId }: { conversationId: string }) {
   const message = result?.status === "EMPTY" ? "You're all caught up" : result?.status === "AI_UNAVAILABLE" ? `AI unavailable · ${result.messageCount} unread message${result.messageCount === 1 ? "" : "s"}` : null;
 
   return (
-    <div className="space-y-2 border-b border-[hsl(var(--border))] px-4 py-2.5 sm:px-5">
-      <Button type="button" size="sm" variant="ghost" disabled={loading} onClick={run}><Sparkles className="h-3.5 w-3.5" />{loading ? "Catching up…" : "Catch up"}</Button>
-      {error && <p role="alert" className="text-xs text-[hsl(var(--destructive))]">{error}</p>}
-      {message && <p role="status" className="text-xs text-[hsl(var(--foreground-muted))]">{message}</p>}
-      {result?.status === "OK" && result.summary && <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background-secondary))] p-3">
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--foreground-subtle))]">AI-generated summary · advisory, check the messages before acting</p>
-          <button type="button" onClick={() => setResult(null)} className="rounded p-1 hover:bg-[hsl(var(--card))]" aria-label="Dismiss summary"><X className="h-3.5 w-3.5" /></button>
-        </div>
-        <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-6">{result.summary}</p>
-      </div>}
+    <div className="space-y-2 border-b border-[var(--line)] px-4 py-2.5 sm:px-5">
+      <Button type="button" size="sm" variant="ghost" disabled={loading} aria-busy={loading} onClick={run}><Sparkles className="h-3.5 w-3.5" aria-hidden="true" />{loading ? "Catching up…" : "Catch up"}</Button>
+      {error && <p role="alert" className="text-xs text-[var(--bad)]">{error}</p>}
+      <div aria-live="polite" className="space-y-2">
+        {message && <p className="text-xs text-[var(--ink-2)]">{message}</p>}
+        {result?.status === "OK" && result.summary && <div className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-3">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--ink-3)]">AI-generated summary · advisory, check the messages before acting</p>
+            <button type="button" onClick={() => setResult(null)} className="-m-1.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-[var(--sunk)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--link)]" aria-label="Dismiss summary"><X className="h-3.5 w-3.5" aria-hidden="true" /></button>
+          </div>
+          <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-6">{result.summary}</p>
+        </div>}
+      </div>
     </div>
   );
 }
