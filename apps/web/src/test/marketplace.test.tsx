@@ -12,7 +12,7 @@ import { MarketplaceEmpty } from "../components/marketplace/marketplace-empty";
 import { ConnectModal } from "../components/auth/connect-modal";
 import { Button } from "../components/ui/button";
 import { AuthStoreContext, createAuthStore } from "@/lib/store/use-auth-store";
-import { getWalletKind, setWalletKind } from "@/lib/web3/client";
+import { getWalletKind, setWalletKind } from "@/lib/web3/wallet-kind";
 import { connectGoogle, isInAppConfigured } from "@/lib/web3/in-app";
 
 vi.mock("@/lib/web3/in-app", () => ({

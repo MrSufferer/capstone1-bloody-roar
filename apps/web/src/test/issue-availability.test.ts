@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@bloody-roar/database";
 import { execute, loadSchema } from "./graphql-execute";
+import { readChainTime } from "../lib/escrow/chain-time";
 vi.mock("../lib/escrow/chain-time", () => ({ readChainTime: vi.fn(async () => new Date()) }));
 beforeAll(loadSchema, 60_000);
 const client = { id: "client", role: "CLIENT", walletAddress: "0x1111111111111111111111111111111111111111", isBanned: false };
@@ -33,7 +34,10 @@ type Result = { escrow: { phase: string; amountRaw: string; externalDelivery: bo
   reservation: { id: string } | null; latestSubmission: { id: string } | null; viewerCapabilities: Record<string, boolean> };
 describe("Issue availability", () => {
   it("exposes integer amounts, actions and client permissions", async () => {
+    vi.mocked(readChainTime).mockClear();
     const result = await run(client); expect(result.errors).toBeUndefined(); const row = result.data?.issue as Result;
+    expect(readChainTime).toHaveBeenCalledTimes(1);
+    expect(readChainTime).toHaveBeenCalledWith(31337, { timeout: 2500, retryCount: 0 });
     expect(row.escrow).toMatchObject({ phase: "FUNDED", amountRaw: "100000000", externalDelivery: false });
     expect(row.escrow?.availableActions.find((a) => a.action === "releaseFunds")?.reasonDisabled).toBeNull();
     expect(row.viewerCapabilities).toMatchObject({ canRelease: true, canDispute: true, canSubmit: false, canRequestChanges: true, canProposeSettlement: true });

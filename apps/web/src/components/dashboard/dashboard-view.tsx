@@ -2,6 +2,7 @@
 
 import { useToastState } from "@/lib/toast";
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ArrowRight, BriefcaseBusiness, CircleDollarSign, ClipboardList, Clock3 } from "lucide-react";
@@ -12,33 +13,19 @@ import { issueStatus } from "@/lib/issue-status";
 import { Badge } from "@/components/ui/badge";
 import { AuthRequiredPanel } from "@/components/auth/auth-required-panel";
 import { useUiPreferences } from "@/lib/ui-preferences";
+import { dashboardQueryOptions } from "./dashboard-query";
 import type { PreparedCall } from "@/lib/web3/send-prepared";
 import type * as SendPrepared from "@/lib/web3/send-prepared";
 
 const sendPreparedCalls: typeof SendPrepared.sendPreparedCalls = async (...args) => (await import("@/lib/web3/send-prepared")).sendPreparedCalls(...args);
 
-const CLAIMABLE_QUERY = `query MyClaimable { myClaimable { chainId contractAddress address amountRaw autoClaimPending } }`;
+const CLAIMABLE_QUERY = `query MyClaimable { myClaimable { amountRaw autoClaimPending } }`;
 const PREPARE_CLAIM = `mutation PrepareClaim($recipient: String!) { prepareClaim(recipient: $recipient) { intentId method contractAddress data value } }`;
 const RECORD_TX = `mutation RecordTx($id: ID!, $hash: String!) { recordTransactionSubmitted(intentId: $id, txHash: $hash) { id } }`;
 
 // Escrow balances use six decimal places (USDC raw units).
 const formatRaw = (raw: string) => (Number(raw) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 6 });
 
-const DASHBOARD_QUERY = `query Dashboard {
-  userStats { postedTasks workingTasks completedTasks applications completedPayouts }
-  myIssues { id title status category bountyAmount { formatted } createdAt updatedAt expiresAt developerId clientId token { symbol } }
-  myApplications { id status createdAt issue { id title status bountyAmount { formatted } token { symbol } client { name } } }
-}`;
-
-type DashboardTask = { id: string; title: string; status: string; category: string; bountyAmount: number; createdAt: string; updatedAt: string; expiresAt?: string | null; developerId?: string | null; clientId: string; token: { symbol: string } };
-type DashboardApplication = { id: string; status: string; createdAt: string; issue: { id: string; title: string; status: string; bountyAmount: number; token: { symbol: string }; client: { name?: string | null } } };
-type DashboardData = { userStats: { postedTasks: number; workingTasks: number; completedTasks: number; applications: number; completedPayouts: number }; myIssues: DashboardTask[]; myApplications: DashboardApplication[] };
-// The API returns bounty amounts as TokenAmount objects; the view works with plain numbers.
-type DashboardRaw = {
-  userStats: DashboardData["userStats"];
-  myIssues: Array<Omit<DashboardTask, "bountyAmount"> & { bountyAmount: { formatted: string } }>;
-  myApplications: Array<Omit<DashboardApplication, "issue"> & { issue: Omit<DashboardApplication["issue"], "bountyAmount"> & { bountyAmount: { formatted: string } } }>;
-};
 type Tab = "all" | "posted" | "working" | "applications";
 
 const APPLICATION_LABELS: Record<string, string> = { PENDING: "Pending", ACCEPTED: "Accepted", REJECTED: "Not selected", WITHDRAWN: "Withdrawn" };
@@ -49,16 +36,20 @@ export function DashboardView() {
   const user = useAuthStore((state) => state.user);
   const authStatus = useAuthStore((state) => state.status);
   const { theme } = useUiPreferences();
-  const [data, setData] = useState<DashboardData | null>(null);
   const queryTab = useSearchParams().get("tab");
   const [tab, setTab] = useState<Tab>(queryTab === "bounties" ? "posted" : "all");
   useEffect(() => { setTab(queryTab === "bounties" ? "posted" : "all"); }, [queryTab]);
-  const [loading, setLoading] = useState(true);
   const [, setError] = useToastState("error");
   const [autoClaimPending, setAutoClaimPending] = useState(false);
   const [claimable, setClaimable] = useState<string>("0");
   const [claiming, setClaiming] = useState(false);
   const [, setClaimNotice] = useToastState("success");
+
+  const { data, error, isPending: loading } = useQuery(dashboardQueryOptions(user?.id));
+
+  useEffect(() => {
+    if (error) setError(error.message);
+  }, [error, setError]);
 
   const loadClaimable = () => graphqlRequest<{ myClaimable: Array<{ amountRaw: string; autoClaimPending: boolean }> }>(CLAIMABLE_QUERY)
     .then((result) => { setAutoClaimPending(result.myClaimable.some((row) => row.autoClaimPending)); setClaimable(result.myClaimable.reduce((sum, row) => sum + BigInt(row.amountRaw), 0n).toString()); })
@@ -80,23 +71,6 @@ export function DashboardView() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not withdraw funds."); }
     finally { setClaiming(false); }
   };
-
-  useEffect(() => {
-    if (!user) { setLoading(false); return; }
-    let active = true;
-    void graphqlRequest<DashboardRaw>(DASHBOARD_QUERY)
-      .then((result) => {
-        if (!active) return;
-        setData({
-          userStats: result.userStats,
-          myIssues: result.myIssues.map((task) => ({ ...task, bountyAmount: Number(task.bountyAmount.formatted) })),
-          myApplications: result.myApplications.map((application) => ({ ...application, issue: { ...application.issue, bountyAmount: Number(application.issue.bountyAmount.formatted) } })),
-        });
-      })
-      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load your dashboard."); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [user, setError]);
 
   const tasks = useMemo(() => (data?.myIssues ?? []).filter((task) => {
     if (tab === "posted") return task.clientId === user?.id;

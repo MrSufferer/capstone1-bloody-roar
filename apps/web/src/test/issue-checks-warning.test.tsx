@@ -31,7 +31,7 @@ beforeEach(() => {
   noChecks = true; cases = []; session.user = { ...session.user, id: "client", role: "CLIENT" };
   request.mockReset();
   request.mockImplementation(async (query: string) => {
-    if (query.includes("query IssueDetail")) return { issue: {
+    if (query.includes("query IssueDetail") || query.includes("query IssueActions")) return { issue: {
       id: "issue", title: "Fix addition", description: "Fix the sum function.", category: "BUG_FIX", status: "OPEN",
       noExecutableTests: noChecks, bountyAmount: { formatted: "100", raw: "100000000", decimals: 6 },
       clientId: "client", developerId: "developer", client: person("client"), developer: person("developer"),
@@ -73,6 +73,26 @@ describe("automated checks warning on the issue page", () => {
     }
     expect(operations.filter((query) => query.includes("query UnreadMessages"))).toHaveLength(1);
     expect(operations.filter((query) => query.includes("mutation RecordIssueView"))).toHaveLength(1);
+  });
+
+  it("renders the bounty while escrow availability is pending or unavailable", async () => {
+    const handler = request.getMockImplementation()!;
+    let failAvailability: (error: Error) => void = () => { throw new Error("Availability query did not start"); };
+    request.mockImplementation((query: string) => {
+      if (query.includes("query IssueActions")) {
+        return new Promise((_resolve, reject) => { failAvailability = reject; });
+      }
+      if (query.includes("query IssueDetail") && query.includes("availableActions")) {
+        return new Promise(() => undefined);
+      }
+      return handler(query);
+    });
+
+    renderIssue();
+    expect(await screen.findByText("Fix addition")).toBeInTheDocument();
+    await act(async () => failAvailability(new Error("Chain RPC unavailable")));
+    expect(screen.getByText("Fix addition")).toBeInTheDocument();
+    expect(screen.getByText("Bounty actions could not be loaded.")).toBeInTheDocument();
   });
 
   it("does not warn about missing checks when approved code exists", async () => {
@@ -139,7 +159,7 @@ describe("approving a delivery", () => {
   it("does not offer release when the submission has no delivery hash", async () => {
     const handler = request.getMockImplementation()!;
     request.mockImplementation(async (query: string) => {
-      if (query.includes("query IssueDetail")) {
+      if (query.includes("query IssueDetail") || query.includes("query IssueActions")) {
         const { issue } = await handler(query) as { issue: object };
         return { issue: { ...issue, status: "IN_PROGRESS", viewerCapabilities: { canRelease: true }, escrow: { availableActions: [{ action: "releaseFunds", reasonDisabled: null }] }, viewerSubmissions: [{ id: "submission", status: "SUBMITTED", deliveryHash: null, submittedAt: "2026-11-17T00:00:00Z", developer: { name: "developer", walletAddress: "0x1111111111111111111111111111111111111111" } }] } };
       }

@@ -6,7 +6,7 @@ import { createContext, useContext } from "react";
 import { createStore, useStore } from "zustand";
 import { apiClient, getApiErrorMessage } from "@/lib/api-client";
 import { createLoginMessage, type SiweLoginPayload } from "@/lib/auth/siwe";
-import { getWalletKind, setWalletKind } from "@/lib/web3/client";
+import { getWalletKind, setWalletKind } from "@/lib/web3/wallet-kind";
 
 export { createLoginMessage } from "@/lib/auth/siwe";
 

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, it, vi } from "vitest";
 import { DashboardView } from "../components/dashboard/dashboard-view";
 
@@ -19,9 +20,15 @@ it("shows an application in All work even when the developer has no tasks", asyn
       issue: { id: "issue", title: "Audit escrow", status: "OPEN", bountyAmount: { formatted: "100" }, token: { symbol: "USDC" }, client: { name: "Client" } },
     }],
   }));
-  render(<DashboardView />);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const dashboard = <QueryClientProvider client={queryClient}><DashboardView /></QueryClientProvider>;
+  const firstVisit = render(dashboard);
   expect(await screen.findByRole("link", { name: /Audit escrow/ })).toHaveAttribute("href", "/issues/issue");
   expect(screen.queryByText("No tasks here yet")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Applications" }));
   expect(screen.getByRole("link", { name: /Audit escrow/ })).toBeInTheDocument();
+  firstVisit.unmount();
+  render(dashboard);
+  expect(screen.getByRole("link", { name: /Audit escrow/ })).toBeInTheDocument();
+  expect(request.mock.calls.filter(([query]) => query.includes("query Dashboard"))).toHaveLength(1);
 });

@@ -21,7 +21,6 @@ const ISSUES_QUERY = `
         token { symbol name logoUrl }
         client { id name avatar walletAddress reputationScore isGithubVerified }
       } }
-      totalCount
     }
   }
 `;
@@ -35,7 +34,6 @@ const STATS_QUERY = `
 type IssuesResponse = {
   issues: {
     edges: Array<{ node: Omit<IssueItem, "bountyAmount"> & { bountyAmount: { formatted: string } } }>;
-    totalCount: number;
   };
 };
 
@@ -73,12 +71,10 @@ export function HomePageView() {
         if (!active) return;
         const edges = res?.issues?.edges ?? [];
         setIssues(edges.map((e) => ({ ...e.node, bountyAmount: Number(e.node.bountyAmount.formatted) })));
-        setOpenBountiesCount(res?.issues?.totalCount ?? 0);
       })
       .catch(() => {
         if (!active) return;
         setIssues([]);
-        setOpenBountiesCount(null);
       });
 
     queryClient.fetchQuery({ queryKey: ["marketplace-stats"], queryFn: () => graphqlRequest<StatsResponse>(STATS_QUERY) })

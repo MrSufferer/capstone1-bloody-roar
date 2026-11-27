@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createLoginMessage, useAuthStore } from "../lib/store/use-auth-store";
 import type { AuthUser } from "../lib/store/use-auth-store";
 import { apiClient } from "../lib/api-client";
-import { getWalletKind, setWalletKind } from "@/lib/web3/client";
+import { getWalletKind, setWalletKind } from "@/lib/web3/wallet-kind";
 import { disconnectInApp } from "@/lib/web3/in-app";
 
 vi.mock("@/lib/web3/in-app", () => ({ disconnectInApp: vi.fn() }));
