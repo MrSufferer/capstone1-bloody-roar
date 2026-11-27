@@ -95,11 +95,13 @@ export function ChatRoom({
   conversationId,
   issueTitle,
   readOnly = false,
+  kind,
 }: {
   issueId: string;
   conversationId: string;
   issueTitle?: string;
   readOnly?: boolean;
+  kind?: string;
 }) {
   const user = useAuthStore((state) => state.user);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -151,7 +153,7 @@ export function ChatRoom({
           return;
         }
         setConnection("ready");
-        client.emit("task:join", issueId, () => undefined);
+        if (kind === "ISSUE_WORK") client.emit("task:join", issueId, () => undefined);
       });
     });
     client.on("disconnect", () => {
@@ -170,7 +172,7 @@ export function ChatRoom({
       if (document.visibilityState === "visible") void graphqlRequest(`mutation Read($id: ID!, $message: ID!) { markConversationRead(conversationId: $id, throughMessageId: $message) }`, { id: conversationId, message: message.id }).catch(() => undefined);
     });
 
-    client.on("escrow:invalidate", () => { if (active) void loadLatest(false); });
+    if (kind === "ISSUE_WORK") client.on("escrow:invalidate", () => { if (active) void loadLatest(false); });
     void loadLatest(true);
 
     return () => {
@@ -179,7 +181,7 @@ export function ChatRoom({
       if (client.connected) client.emit("conversation:leave", conversationId);
       client.disconnect();
     };
-  }, [issueId, conversationId, user, setError]);
+  }, [issueId, conversationId, kind, user, setError]);
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -332,5 +334,5 @@ export function IssueChatRoom({ issueId, ...props }: { issueId: string; issueTit
   const [id, setId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { let active = true; setId(null); setError(null); void graphqlRequest<{ workConversation: string }>(`mutation WorkRoom($issue: ID!) { workConversation(issueId: $issue) }`, { issue: issueId }).then((r) => { if (active) setId(r.workConversation); }).catch((e) => { if (active) setError(e.message); }); return () => { active = false; }; }, [issueId]);
-  return id ? <ChatRoom key={id} issueId={issueId} conversationId={id} {...props} /> : <p role={error ? "alert" : "status"}>{error ?? "Loading conversation…"}</p>;
+  return id ? <ChatRoom key={id} issueId={issueId} conversationId={id} kind="ISSUE_WORK" {...props} /> : <p role={error ? "alert" : "status"}>{error ?? "Loading conversation…"}</p>;
 }

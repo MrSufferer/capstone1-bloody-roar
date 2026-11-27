@@ -38,12 +38,21 @@ describe("chat SYSTEM messages (US-87)", () => {
     request.mockImplementation(async (query: string) => query.includes("TaskMessages")
       ? page(node("s1", "Escrow funded", "SYSTEM", "2026-11-27T10:01:00Z"), ...(released ? [node("s2", "Funds released", "SYSTEM", "2026-11-27T11:00:00Z")] : []))
       : {});
-    await act(async () => { render(<ChatRoom issueId="issue" conversationId="conv" />); });
+    await act(async () => { render(<ChatRoom issueId="issue" conversationId="conv" kind="ISSUE_WORK" />); });
     await act(async () => { handlers.get("connect")?.(); });
     expect(emit).toHaveBeenCalledWith("task:join", "issue", expect.any(Function));
     released = true;
     await act(async () => { handlers.get("escrow:invalidate")?.({ escrowId: "esc", projectionVersion: 2 }); });
     expect(await screen.findByText("Funds released")).toBeInTheDocument();
     expect(screen.getByText("Escrow funded")).toBeInTheDocument();
+  });
+
+  it("does not join the task room or listen for escrow updates in an application conversation", async () => {
+    request.mockImplementation(async (query: string) => query.includes("TaskMessages") ? page(node("m1", "Hello", "TEXT", "2026-11-27T10:00:00Z")) : {});
+    await act(async () => { render(<ChatRoom issueId="issue" conversationId="conv" kind="APPLICATION" />); });
+    await act(async () => { handlers.get("connect")?.(); });
+    expect(emit).toHaveBeenCalledWith("conversation:join", "conv", expect.any(Function));
+    expect(emit).not.toHaveBeenCalledWith("task:join", expect.anything(), expect.anything());
+    expect(handlers.has("escrow:invalidate")).toBe(false);
   });
 });

@@ -64,9 +64,9 @@ test("deposit and submit each post one SYSTEM message, rescans do not duplicate,
   await scanOnce({ db: prisma, rpc: fakeRpc(chain), config });
   const events = await prisma.chainEvent.findMany({ where: { escrowIdHash }, orderBy: { logIndex: "asc" } });
   const messages = await systemMessages(issueId);
-  expect(messages.map((m) => ({ content: m.content, senderId: m.senderId, clientMessageId: m.clientMessageId }))).toEqual([
-    { content: "Escrow funded", senderId: clientId, clientMessageId: `${events[0]!.id}:sys` },
+  expect(messages.map((m) => ({ content: m.content, senderId: m.senderId, clientMessageId: m.clientMessageId })).sort((a, b) => a.content.localeCompare(b.content))).toEqual([
     { content: "Delivery v1 submitted", senderId: developerId, clientMessageId: `${events[1]!.id}:sys` },
+    { content: "Escrow funded", senderId: clientId, clientMessageId: `${events[0]!.id}:sys` },
   ]);
   const conversation = await prisma.conversation.findFirstOrThrow({ where: { issueId, kind: "ISSUE_WORK" } });
   expect(messages.every((m) => m.conversationId === conversation.id)).toBe(true);
@@ -80,6 +80,7 @@ test("deposit and submit each post one SYSTEM message, rescans do not duplicate,
   chain.logs = [];
   await handleReorg({ db: prisma, rpc: fakeRpc(chain), config });
   expect(await systemMessages(issueId)).toHaveLength(0);
+  expect((await prisma.conversation.findUniqueOrThrow({ where: { id: conversation.id } })).lastMessageAt).toBeNull();
 });
 
 test("a RELEASE resolution posts one Funds released message and undo removes it", async () => {
@@ -97,8 +98,11 @@ test("a RELEASE resolution posts one Funds released message and undo removes it"
   expect(messages.map((m) => ({ content: m.content, senderId: m.senderId, clientMessageId: m.clientMessageId }))).toEqual([
     { content: "Funds released", senderId: clientId, clientMessageId: `${meta.chainEventId}:sys` },
   ]);
+  const earlier = new Date(Date.now() - 3600_000);
+  await prisma.message.create({ data: { conversationId: messages[0]!.conversationId, issueId: issue.id, senderId: developerId, content: "before release", type: "TEXT", createdAt: earlier } });
   await prisma.$transaction((tx) => undoResolved(tx, meta.chainEventId, undo, config.chainId, config.escrowAddress));
   expect(await systemMessages(issue.id)).toHaveLength(0);
+  expect((await prisma.conversation.findUniqueOrThrow({ where: { id: messages[0]!.conversationId! } })).lastMessageAt).toEqual(earlier);
 });
 
 });

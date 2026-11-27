@@ -13,6 +13,7 @@ export async function applyWorkSubmitted(tx: Prisma.TransactionClient, effect: E
     data: { status: SubmissionStatus.SUPERSEDED, supersededAt: new Date(Number(meta.blockTimestamp) * 1000) } });
   if (delivery) await tx.submission.update({ where: { id: delivery.id }, data: { status: SubmissionStatus.SUBMITTED, submittedAt: new Date(Number(meta.blockTimestamp) * 1000), supersededAt: null, onChainEventId: meta.chainEventId } });
   if (delivery && issue.developerId) {
+    await tx.$queryRaw`SELECT id FROM issues WHERE id = ${projection.issueId} FOR UPDATE`;
     const version = await tx.submission.count({ where: { issueId: projection.issueId, onChainEventId: { not: null } } });
     await postSystemMessage(tx, { id: projection.issueId, ...issue }, delivery.developerId, `Delivery v${version} submitted`, `${meta.chainEventId}:sys`);
   }

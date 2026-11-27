@@ -141,7 +141,7 @@ describe("requestChanges", () => {
     expect(result.errors).toBeUndefined();
     expect(database.tx.submission.update.mock.calls[0]![0].data).toMatchObject({ changesRequested: true, reviewNotes: "please revise" });
     expect(database.tx.notification.createMany.mock.calls[0]![0].data[0]).toMatchObject({ userId: actor.id, type: "CHANGES_REQUESTED" });
-    expect(database.tx.message.create.mock.calls[0]![0].data).toMatchObject({ type: "SYSTEM", content: "Changes requested", senderId: client.id, clientMessageId: "changes:draft:sys" });
+    expect(database.tx.message.create.mock.calls[0]![0].data).toMatchObject({ type: "SYSTEM", content: "Changes requested", senderId: client.id, clientMessageId: "changes:draft:251fa28498e3c16a6c9aa0526518734f436b6ac1d94ab613e8f082e359fd9b90:sys" });
     expect(database.tx.$executeRaw).toHaveBeenCalledTimes(2);
   });
   it("retries a serialization conflict before notifying the developer", async () => {

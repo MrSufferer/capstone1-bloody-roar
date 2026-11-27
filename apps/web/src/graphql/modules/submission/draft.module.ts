@@ -155,12 +155,13 @@ builder.mutationField("requestChanges", (t) => t.field({
           if (!projection || projection.phase !== EscrowPhase.FUNDED || projection.client.toLowerCase() !== user.walletAddress.toLowerCase() ||
               submission.status !== SubmissionStatus.SUBMITTED || !submission.deliveryHash || projection.deliveryHash?.toLowerCase() !== submission.deliveryHash.toLowerCase())
             throw gqlError("The submission is no longer awaiting review", "SUBMISSION_NOT_REVIEWABLE");
+          const notesHash = createHash("sha256").update(notes).digest("hex");
           const changed = await tx.submission.update({ where: { id: submission.id }, data: { changesRequested: true, reviewNotes: notes, reviewedAt: new Date() }, include: SUBMISSION_INCLUDE });
           const notification = await createNotificationIdempotent(tx, { userId: submission.developerId, type: "CHANGES_REQUESTED", title: "The client requested changes",
             body: notes, link: `/issues/${submission.issueId}`, data: { issueId: submission.issueId, submissionId: submission.id },
-            dedupeKey: `changes:${submission.id}:${createHash("sha256").update(notes).digest("hex")}` });
+            dedupeKey: `changes:${submission.id}:${notesHash}` });
           if (notification) await tx.$executeRaw`SELECT pg_notify(${NOTIFICATION_CREATED_CHANNEL}, ${JSON.stringify({ userId: submission.developerId, id: notification.id })})`;
-          await postSystemMessage(tx, submission.issue, user.id, "Changes requested", `changes:${submission.id}:sys`);
+          await postSystemMessage(tx, submission.issue, user.id, "Changes requested", `changes:${submission.id}:${notesHash}:sys`);
           await tx.$executeRaw`SELECT pg_notify(${PROJECTION_CHANGED_CHANNEL}, ${JSON.stringify({ escrowId: projection.id, issueId: submission.issueId, projectionVersion: projection.projectionVersion })})`;
           return changed;
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
