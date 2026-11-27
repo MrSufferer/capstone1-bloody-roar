@@ -29,7 +29,7 @@ export async function restoreChain(snapshot: string, { prisma }: { prisma: Prism
     account,
     nonce: await rpc<string>("eth_getTransactionCount", [account, "latest"]),
   })));
-  if (!(await rpc<boolean>("evm_revert", [snapshot]))) throw new Error("evm_revert failed");
+  await fakeReorg(snapshot, 0);
   for (const { account, nonce } of nonces) await rpc("hardhat_setNonce", [account, nonce]);
   const where = { chainId: 31337, contractAddress: process.env.ESCROW_ADDRESS!.toLowerCase() };
   const checkpoint = await prisma.projectionCheckpoint.findFirstOrThrow({ where });

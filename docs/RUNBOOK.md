@@ -141,11 +141,11 @@ kiểm tra hai việc: reorg 2 block tự phục hồi và projection khớp cha
 `hardhat_setCode`.
 
 ```bash
-cd apps/contracts && bunx hardhat node --port 8546
+bun run --cwd apps/contracts node --port 8546
 cd apps/worker && RPC_URL=http://127.0.0.1:8546 \
   TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/bloody_roar_test \
   bun test test/reorg.hardhat.test.ts
 ```
 
-Database phải có tên kết thúc bằng `_test` và đã migrate. Nếu RPC không phản hồi hoặc
-thiếu `TEST_DATABASE_URL`, test tự skip.
+Database phải có tên kết thúc bằng `_test` và đã migrate. Nếu RPC không phản hồi, không phải Hardhat (chain id 31337) hoặc
+thiếu `TEST_DATABASE_URL`, test tự skip. Skip cũng hiện màu xanh, nên hãy xác nhận output có `2 pass`.
