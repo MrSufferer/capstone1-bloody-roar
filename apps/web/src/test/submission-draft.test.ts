@@ -162,4 +162,13 @@ describe("requestChanges", () => {
     expect((await execute(query, { user: client, db: database }, { id: "draft", notes: "revise" })).errors?.[0]?.extensions?.code).toBe("SUBMISSION_NOT_REVIEWABLE");
     expect(database.tx.notification.createMany).not.toHaveBeenCalled();
   });
+  it("requests changes in an HTTP-only deployment without a socket server", async () => {
+    const database = reviewDb();
+    const io = (global as Record<string, unknown>).__socketIO;
+    delete (global as Record<string, unknown>).__socketIO;
+    const result = await execute(query, { user: client, db: database }, { id: "draft", notes: "please revise" });
+    (global as Record<string, unknown>).__socketIO = io;
+    expect(result.errors).toBeUndefined();
+    expect(database.emit).not.toHaveBeenCalled();
+  });
 });

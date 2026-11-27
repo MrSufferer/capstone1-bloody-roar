@@ -146,10 +146,14 @@ export function registerSocketHandlers(
  * Use in GraphQL mutations to broadcast events
  */
 export function getSocketIO(): Server<ClientToServerEvents, ServerToClientEvents> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const io = (global as any).__socketIO;
+  const io = getSocketIOOrNull();
   if (!io) throw new Error("Socket.io not initialized");
   return io;
+}
+
+export function getSocketIOOrNull(): Server<ClientToServerEvents, ServerToClientEvents> | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (global as any).__socketIO ?? null;
 }
 
 /** Close every active connection after a user's session is revoked or banned. */

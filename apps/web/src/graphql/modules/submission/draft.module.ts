@@ -10,7 +10,7 @@ import { SubmissionRef, SUBMISSION_INCLUDE } from "./submission.module";
 import { PreparedCallRef } from "../escrow/release.module";
 import { createPreparedCall, escrowTarget } from "../../../lib/escrow/prepare";
 import { guardMessage } from "../../../ai/guard/service";
-import { getSocketIO, toMessagePayload } from "../../../socket/handlers";
+import { getSocketIOOrNull, toMessagePayload } from "../../../socket/handlers";
 
 import { assertSubmissionTestsPassed } from "../../../lib/test-runs";
 
@@ -165,9 +165,10 @@ builder.mutationField("requestChanges", (t) => t.field({
           const message = await postSystemMessage(tx, submission.issue, user.id, "Changes requested", `changes:${submission.id}:${notesHash}:sys`);
           return { changed, message };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-        if (message) {
-          getSocketIO().to(`conv:${message.conversationId}`).emit("message:new", toMessagePayload(message, message.sender));
-          getSocketIO().to(`user:${changed.developerId}`).emit("inbox:update", { conversationId: message.conversationId, lastMessageAt: message.createdAt.toISOString(), unreadDelta: 1 });
+        const io = getSocketIOOrNull();
+        if (message && io) {
+          io.to(`conv:${message.conversationId}`).emit("message:new", toMessagePayload(message, message.sender));
+          io.to(`user:${changed.developerId}`).emit("inbox:update", { conversationId: message.conversationId, lastMessageAt: message.createdAt.toISOString(), unreadDelta: 1 });
         }
         return changed;
       } catch (error) {
