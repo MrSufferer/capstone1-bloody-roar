@@ -27,7 +27,7 @@ export function toMessagePayload(
   return {
     id: message.id,
     content: message.content,
-    type: message.type as "TEXT" | "FILE",
+    type: message.type,
     senderId: sender.id,
     senderName: sender.name || "Anonymous",
     ...(sender.avatar ? { senderAvatar: sender.avatar } : {}),

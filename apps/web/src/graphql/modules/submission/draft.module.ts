@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createNotificationIdempotent, NOTIFICATION_CREATED_CHANNEL, EscrowPhase, IssueStatus, Prisma, SubmissionStatus } from "@bloody-roar/database";
+import { createNotificationIdempotent, NOTIFICATION_CREATED_CHANNEL, PROJECTION_CHANGED_CHANNEL, postSystemMessage, EscrowPhase, IssueStatus, Prisma, SubmissionStatus } from "@bloody-roar/database";
 import { computeDeliveryHash } from "@bloody-roar/shared/escrow";
 import { z } from "zod";
 import { builder } from "../../builder";
@@ -160,6 +160,8 @@ builder.mutationField("requestChanges", (t) => t.field({
             body: notes, link: `/issues/${submission.issueId}`, data: { issueId: submission.issueId, submissionId: submission.id },
             dedupeKey: `changes:${submission.id}:${createHash("sha256").update(notes).digest("hex")}` });
           if (notification) await tx.$executeRaw`SELECT pg_notify(${NOTIFICATION_CREATED_CHANNEL}, ${JSON.stringify({ userId: submission.developerId, id: notification.id })})`;
+          await postSystemMessage(tx, submission.issue, user.id, "Changes requested", `changes:${submission.id}:sys`);
+          await tx.$executeRaw`SELECT pg_notify(${PROJECTION_CHANGED_CHANNEL}, ${JSON.stringify({ escrowId: projection.id, issueId: submission.issueId, projectionVersion: projection.projectionVersion })})`;
           return changed;
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       } catch (error) {

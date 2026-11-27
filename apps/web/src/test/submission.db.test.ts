@@ -64,6 +64,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("Submission on the test database
     expect((await execute(CHANGES, { user: outsider, db: prisma }, { id: initial.id })).errors?.[0]?.extensions?.code).toBe("FORBIDDEN");
     expect((await execute(CHANGES, { user: client, db: prisma }, { id: initial.id })).errors).toBeUndefined();
     expect(await prisma.notification.count({ where: { userId: developer.id, type: "CHANGES_REQUESTED", data: { path: ["issueId"], equals: issueId } } })).toBe(1);
+    expect((await execute(CHANGES, { user: client, db: prisma }, { id: initial.id })).errors).toBeUndefined();
+    expect((await prisma.message.findMany({ where: { issueId, type: "SYSTEM" } })).map((m) => ({ content: m.content, senderId: m.senderId, clientMessageId: m.clientMessageId })))
+      .toEqual([{ content: "Changes requested", senderId: client.id, clientMessageId: `changes:${initial.id}:sys` }]);
   }, 60_000);
   it("preserves every prepared hash when edit and prepare race", async () => {
     const created = await execute(CREATE, { user: developer, db: prisma }, { issue: issueId, text: "parallel original" });

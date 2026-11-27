@@ -124,12 +124,15 @@ describe("requestChanges", () => {
   const query = `mutation($id: ID!, $notes: String!) { requestChanges(submissionId: $id, notes: $notes) { id status } }`;
   const client = { ...actor, id: "client", walletAddress: "0x2222222222222222222222222222222222222222" };
   function reviewDb() {
-    const submission = { id: "draft", issueId: "issue", developerId: actor.id, status: "SUBMITTED", deliveryHash: "0xaaa", issue: { clientId: client.id } };
+    const submission = { id: "draft", issueId: "issue", developerId: actor.id, status: "SUBMITTED", deliveryHash: "0xaaa", issue: { id: "issue", clientId: client.id, developerId: actor.id } };
     const chain = { phase: "FUNDED", client: client.walletAddress, deliveryHash: "0xaaa" };
     const tx = { $queryRaw: vi.fn().mockResolvedValue([]), $executeRaw: vi.fn().mockResolvedValue(1),
       submission: { findUnique: vi.fn(async () => submission), update: vi.fn(async (_args: { data: Record<string, unknown> }) => submission) },
       escrowProjection: { findUnique: vi.fn(async () => chain) },
-      notification: { createMany: vi.fn(async (_args: { data: Array<Record<string, unknown>> }) => ({ count: 1 })), findUniqueOrThrow: vi.fn(async () => ({ id: "notification" })) } };
+      notification: { createMany: vi.fn(async (_args: { data: Array<Record<string, unknown>> }) => ({ count: 1 })), findUniqueOrThrow: vi.fn(async () => ({ id: "notification" })) },
+      conversation: { findFirst: async () => ({ id: "conversation" }), update: async () => ({}) },
+      conversationParticipant: { deleteMany: async () => ({ count: 0 }), upsert: async () => ({}) },
+      message: { findFirst: async () => null, create: vi.fn(async (_args: { data: Record<string, unknown> }) => ({ createdAt: new Date() })) } };
     return { submission, chain, tx, $transaction: vi.fn(async (fn: (value: typeof tx) => unknown) => fn(tx)) };
   }
   it("records notes and notifies the developer", async () => {
@@ -138,7 +141,8 @@ describe("requestChanges", () => {
     expect(result.errors).toBeUndefined();
     expect(database.tx.submission.update.mock.calls[0]![0].data).toMatchObject({ changesRequested: true, reviewNotes: "please revise" });
     expect(database.tx.notification.createMany.mock.calls[0]![0].data[0]).toMatchObject({ userId: actor.id, type: "CHANGES_REQUESTED" });
-    expect(database.tx.$executeRaw).toHaveBeenCalledOnce();
+    expect(database.tx.message.create.mock.calls[0]![0].data).toMatchObject({ type: "SYSTEM", content: "Changes requested", senderId: client.id, clientMessageId: "changes:draft:sys" });
+    expect(database.tx.$executeRaw).toHaveBeenCalledTimes(2);
   });
   it("retries a serialization conflict before notifying the developer", async () => {
     const database = reviewDb();
