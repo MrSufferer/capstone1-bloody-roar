@@ -176,6 +176,38 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
     }
   });
 
+  const seedChat = (count: number, fileSize: number, extra: { status?: "REJECTED"; createdAt?: Date } = {}) =>
+    prisma.attachment.createMany({
+      data: Array.from({ length: count }, (_, i) => ({ conversationId, uploaderId: developer.id, fileName: `seed-${i}.txt`, fileUrl: `http://localhost/seed/${randomBytes(8).toString("hex")}`, fileSize, fileMime: "text/plain", purpose: "CHAT" as const, status: "ATTACHED" as const, ...extra })),
+    });
+
+  it("refuses the 51st chat upload in 24 hours with RATE_LIMITED, counting rejected files", async () => {
+    auth.user = developer;
+    await prisma.attachment.deleteMany({ where: { uploaderId: developer.id } });
+    await seedChat(5, 100, { createdAt: new Date(Date.now() - 25 * 3_600_000) });
+    await seedChat(10, 100, { status: "REJECTED" });
+    await seedChat(39, 100);
+    expect((await start("text/plain", 100)).status).toBe(200);
+    const response = await start("text/plain", 100);
+    expect(response.status).toBe(429);
+    expect(await response.json()).toMatchObject({ code: "RATE_LIMITED" });
+    expect((await start("image/png", 100, "ISSUE_IMAGE")).status).toBe(200);
+    auth.user = client;
+  });
+
+  it("refuses a chat upload that would pass 200 MB in 24 hours with RATE_LIMITED", async () => {
+    auth.user = developer;
+    await prisma.attachment.deleteMany({ where: { uploaderId: developer.id } });
+    await seedChat(2, 10 * MB, { createdAt: new Date(Date.now() - 25 * 3_600_000) });
+    await seedChat(4, 10 * MB, { status: "REJECTED" });
+    await seedChat(15, 10 * MB);
+    expect((await start("image/png", 10 * MB)).status).toBe(200);
+    const response = await start("text/plain", 1);
+    expect(response.status).toBe(429);
+    expect(await response.json()).toMatchObject({ code: "RATE_LIMITED" });
+    auth.user = client;
+  });
+
   it("attaches a valid chat file at complete", async () => {
     const { id, destination } = await stored("text/plain", new TextEncoder().encode("hello chat"));
     const response = await complete(post("http://localhost/api/uploads/complete", { attachmentId: id }));
