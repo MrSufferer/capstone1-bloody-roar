@@ -22,6 +22,7 @@ const deadline = 0x6aaa0000n + 30n * 86400n;
 const termsHash = hash();
 const deliveryHash = hash();
 let clientId = "", developerId = "", issueId = "", tokenId = "", releaseIssueId = "";
+const extraIssueIds: string[] = [];
 let clientAddress: Hex, developerAddress: Hex;
 
 const systemMessages = (id: string) => prisma.message.findMany({ where: { issueId: id, type: "SYSTEM" }, orderBy: { createdAt: "asc" } });
@@ -43,9 +44,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await prisma.notification.deleteMany({ where: { userId: { in: [clientId, developerId] } } });
   await prisma.claimableBalance.deleteMany({ where: { chainId: config.chainId, contractAddress: config.escrowAddress.toLowerCase() } });
-  await prisma.escrowProjection.deleteMany({ where: { issueId: { in: [issueId, releaseIssueId] } } });
+  await prisma.escrowProjection.deleteMany({ where: { issueId: { in: [issueId, releaseIssueId, ...extraIssueIds] } } });
   await prisma.fundingReservation.deleteMany({ where: { issueId } });
-  await prisma.issue.deleteMany({ where: { id: { in: [issueId, releaseIssueId] } } });
+  await prisma.issue.deleteMany({ where: { id: { in: [issueId, releaseIssueId, ...extraIssueIds] } } });
   await prisma.token.deleteMany({ where: { id: tokenId } });
   await prisma.user.deleteMany({ where: { id: { in: [clientId, developerId] } } });
   await cleanupChain(prisma, config);
@@ -103,6 +104,43 @@ test("a RELEASE resolution posts one Funds released message and undo removes it"
   await prisma.$transaction((tx) => undoResolved(tx, meta.chainEventId, undo, config.chainId, config.escrowAddress));
   expect(await systemMessages(issue.id)).toHaveLength(0);
   expect((await prisma.conversation.findUniqueOrThrow({ where: { id: messages[0]!.conversationId! } })).lastMessageAt).toEqual(earlier);
+});
+
+const projectedIssue = async (label: string) => {
+  const issue = await prisma.issue.create({ data: { title: label, description: label, category: "BUG_FIX", status: "IN_PROGRESS", bountyAmount: "100", tokenId, clientId, developerId, requiredSkills: [] } });
+  extraIssueIds.push(issue.id);
+  const key = `sysmsg-${label}-${issue.id}`, idHash = keccakUtf8(key), at = new Date(Date.now() + 86400_000);
+  await prisma.escrowProjection.create({ data: { issueId: issue.id, escrowKey: key, escrowIdHash: idHash, chainId: config.chainId, contractAddress: config.escrowAddress, client: clientAddress, developer: developerAddress,
+    arbiter: address(), feeRecipient: address(), amountRaw: "100", depositedAt: new Date(), deliveryDeadline: at, reviewDeadline: at, termsHash, phase: "FUNDED", lastProjectedBlock: 100n } });
+  const meta = { chainId: config.chainId, contractAddress: config.escrowAddress, chainEventId: `sysmsg-${label}-${issue.id}`, escrowIdHash: idHash, blockNumber: 101n,
+    blockHash: `0x${"11".repeat(32)}` as Hex, txHash: `0x${"33".repeat(32)}` as Hex, txIndex: 0, logIndex: 0, blockTimestamp: BigInt(Math.floor(Date.now() / 1000)) };
+  return { issue, idHash, meta };
+};
+
+test("a REVIEW_TIMEOUT resolution posts Funds released from the developer", async () => {
+  const { issue, idHash, meta } = await projectedIssue("timeout");
+  const effect: Extract<FoldEffect, { kind: "ESCROW_RESOLVED" }> = { kind: "ESCROW_RESOLVED", escrowIdHash: idHash, resolution: "REVIEW_TIMEOUT", client: clientAddress, developer: developerAddress,
+    feeRecipient: address(), clientAmount: 0n, developerAmount: 98n, platformFee: 2n, decisionHash: `0x${"00".repeat(32)}` };
+  await prisma.$transaction((tx) => applyFoldEffects(tx, [effect], meta));
+  expect((await systemMessages(issue.id)).map((m) => ({ content: m.content, senderId: m.senderId, clientMessageId: m.clientMessageId }))).toEqual([
+    { content: "Funds released", senderId: developerId, clientMessageId: `${meta.chainEventId}:sys` },
+  ]);
+});
+
+test("a WorkSubmitted with no matching submission still posts Delivery submitted", async () => {
+  const { issue, idHash, meta } = await projectedIssue("unmatched");
+  await prisma.$transaction((tx) => applyFoldEffects(tx, [{ kind: "WORK_SUBMITTED", escrowIdHash: idHash, developer: developerAddress, deliveryHash: hash() }], meta));
+  expect((await systemMessages(issue.id)).map((m) => ({ content: m.content, senderId: m.senderId }))).toEqual([{ content: "Delivery submitted", senderId: developerId }]);
+});
+
+test("the delivery version is the delivery's position among the issue's submissions", async () => {
+  const { issue, idHash, meta } = await projectedIssue("version");
+  await prisma.submission.create({ data: { issueId: issue.id, developerId, status: "SUPERSEDED", submittedAt: new Date(Date.now() - 7200_000) } });
+  await prisma.submission.create({ data: { issueId: issue.id, developerId, status: "DRAFT", submittedAt: new Date(Date.now() - 3600_000) } });
+  const matched = hash();
+  await prisma.submission.create({ data: { issueId: issue.id, developerId, deliveryHash: matched, status: "SUBMITTED" } });
+  await prisma.$transaction((tx) => applyFoldEffects(tx, [{ kind: "WORK_SUBMITTED", escrowIdHash: idHash, developer: developerAddress, deliveryHash: matched }], meta));
+  expect((await systemMessages(issue.id)).map((m) => m.content)).toEqual(["Delivery v2 submitted"]);
 });
 
 });
