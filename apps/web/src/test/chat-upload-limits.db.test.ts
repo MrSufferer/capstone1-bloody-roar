@@ -3,11 +3,12 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@bloody-roar/database";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import type * as AuthModule from "../lib/auth";
 import { localUploadPath } from "../lib/storage";
+import { saveConversationMessage } from "../lib/chat-messages";
 
 const auth = vi.hoisted(() => ({ user: null as unknown }));
 vi.mock("../lib/auth", async (original) => ({ ...(await original<typeof AuthModule>()), verifyJWT: async () => auth.user }));
@@ -30,8 +31,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
     tokenId = (await prisma.token.create({ data: { symbol: "CUL", name: "Chat upload", address: address(), decimals: 6, chainId: 31337 } })).id;
     issueId = (await prisma.issue.create({ data: { title: "Chat upload limits", description: "Chat upload limits fixture", category: "BUG_FIX", clientId: client.id, developerId: developer.id, status: "IN_PROGRESS", tokenId, bountyAmount: "100" } })).id;
     conversationId = (await prisma.conversation.create({ data: { issueId, kind: "ISSUE_WORK", participants: { create: [{ userId: client.id, role: "CLIENT" }, { userId: developer.id, role: "DEVELOPER" }] } } })).id;
-    auth.user = client;
   }, 60_000);
+
+  beforeEach(() => { auth.user = client; });
 
   afterAll(async () => {
     vi.unstubAllEnvs();
@@ -192,7 +194,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
     expect(response.status).toBe(429);
     expect(await response.json()).toMatchObject({ code: "RATE_LIMITED" });
     expect((await start("image/png", 100, "ISSUE_IMAGE")).status).toBe(200);
-    auth.user = client;
   });
 
   it("refuses a chat upload that would pass 200 MB in 24 hours with RATE_LIMITED", async () => {
@@ -205,7 +206,25 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat upload type and size limit
     const response = await start("text/plain", 1);
     expect(response.status).toBe(429);
     expect(await response.json()).toMatchObject({ code: "RATE_LIMITED" });
-    auth.user = client;
+  });
+
+  it("grants exactly one of several parallel presigns when the user is at 49 chat files", async () => {
+    auth.user = developer;
+    await prisma.attachment.deleteMany({ where: { uploaderId: developer.id } });
+    await seedChat(49, 100);
+    const statuses = (await Promise.all(Array.from({ length: 5 }, () => start("text/plain", 100)))).map((r) => r.status);
+    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(4);
+    expect(await prisma.attachment.count({ where: { uploaderId: developer.id, purpose: "CHAT" } })).toBe(50);
+  });
+
+  it("refuses to relabel a DELIVERY file into a work-room chat message once the daily quota is used", async () => {
+    await prisma.attachment.deleteMany({ where: { uploaderId: developer.id } });
+    await seedChat(50, 100);
+    const fileUrl = `http://localhost/delivery/${randomBytes(8).toString("hex")}`;
+    const delivery = await prisma.attachment.create({ data: { issueId, uploaderId: developer.id, fileName: "build.zip", fileUrl, fileSize: 100, fileMime: "application/zip", purpose: "DELIVERY", status: "ATTACHED" } });
+    await expect(saveConversationMessage(prisma, developer, { conversationId, issueId, type: "FILE", content: "build.zip", fileUrl })).rejects.toMatchObject({ extensions: { code: "RATE_LIMITED" } });
+    expect(await prisma.attachment.findUniqueOrThrow({ where: { id: delivery.id } })).toMatchObject({ purpose: "DELIVERY", messageId: null });
   });
 
   it("attaches a valid chat file at complete", async () => {

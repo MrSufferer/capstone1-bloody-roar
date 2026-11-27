@@ -12,6 +12,7 @@ import { canReadConversation } from "@/lib/chat-access";
 import { canReadIssueChat } from "@/lib/chat-access";
 import { getS3Storage, localUploadPath } from "@/lib/storage";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { chatQuotaAllows } from "@/lib/chat-quota";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,9 +21,6 @@ const FILE_NAME_LIMIT = 160;
 const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 // The browser shrinks avatars to 256px WebP (~20 KB); anything bigger or in another format is refused.
 const PROFILE_AVATAR_MAX_BYTES = 256 * 1024;
-const CHAT_DAILY_FILE_LIMIT = 50;
-const CHAT_DAILY_BYTES_LIMIT = 200 * 1024 * 1024;
-// CHAT is deliberately absent: chat attachments travel through the socket message flow.
 const UPLOAD_PURPOSES = ["ISSUE_IMAGE", "DELIVERY", "EVIDENCE", "AVATAR", "COMMENT_IMAGE", "SOURCE", "CHAT"] as const;
 type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
@@ -104,13 +102,6 @@ export async function POST(request: Request) {
     if (!body?.conversationId) return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
     try { const room = await accessibleConversation(prisma, body.conversationId, user, true); conversationId = room.id; issueId = room.issueId; }
     catch { return NextResponse.json({ error: "You cannot upload to this conversation" }, { status: 403 }); }
-    const today = await prisma.attachment.aggregate({
-      where: { uploaderId: user.id, purpose: "CHAT", createdAt: { gte: new Date(Date.now() - 86_400_000) } },
-      _count: { _all: true },
-      _sum: { fileSize: true },
-    });
-    if (today._count._all + 1 > CHAT_DAILY_FILE_LIMIT || (today._sum.fileSize ?? 0) + fileSize > CHAT_DAILY_BYTES_LIMIT)
-      return NextResponse.json({ error: "Daily chat upload limit reached", code: "RATE_LIMITED" }, { status: 429 });
   }
 
   const key = `${user.id}/${randomUUID()}-${fileName}`;
@@ -121,7 +112,7 @@ export async function POST(request: Request) {
 
   const origin = new URL(request.url).origin;
   const fileUrl = `${origin}/api/uploads?key=${encodeURIComponent(key)}`;
-  const attachment = await prisma.attachment.create({
+  const attachment = await prisma.$transaction(async (tx) => purpose === "CHAT" && !(await chatQuotaAllows(tx, user.id, fileSize)) ? null : tx.attachment.create({
     data: {
       issueId,
       conversationId,
@@ -133,7 +124,8 @@ export async function POST(request: Request) {
       purpose: purpose as AttachmentPurpose,
       status: "PENDING",
     },
-  });
+  }));
+  if (!attachment) return NextResponse.json({ error: "Daily chat upload limit reached", code: "RATE_LIMITED" }, { status: 429 });
 
   if (s3) {
     const command = new PutObjectCommand({
