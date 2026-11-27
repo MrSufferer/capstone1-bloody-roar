@@ -14,7 +14,9 @@ export async function ensureWorkConversation(tx: Prisma.TransactionClient, issue
 
 export async function postSystemMessage(tx: Prisma.TransactionClient, issue: { id: string; clientId: string; developerId: string | null }, senderId: string, content: string, clientMessageId: string) {
   const conversation = await ensureWorkConversation(tx, issue);
-  if (await tx.message.findFirst({ where: { conversationId: conversation.id, type: "SYSTEM", clientMessageId }, select: { id: true } })) return;
-  const message = await tx.message.create({ data: { conversationId: conversation.id, issueId: issue.id, senderId, content, type: "SYSTEM", clientMessageId } });
+  if (await tx.message.findFirst({ where: { conversationId: conversation.id, type: "SYSTEM", clientMessageId }, select: { id: true } })) return null;
+  const message = await tx.message.create({ data: { conversationId: conversation.id, issueId: issue.id, senderId, content, type: "SYSTEM", clientMessageId },
+    include: { attachments: true, sender: { select: { id: true, name: true, avatar: true } } } });
   await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: message.createdAt } });
+  return message;
 }

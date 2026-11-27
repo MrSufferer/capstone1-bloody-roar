@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createNotificationIdempotent, NOTIFICATION_CREATED_CHANNEL, PROJECTION_CHANGED_CHANNEL, postSystemMessage, EscrowPhase, IssueStatus, Prisma, SubmissionStatus } from "@bloody-roar/database";
+import { createNotificationIdempotent, NOTIFICATION_CREATED_CHANNEL, postSystemMessage, EscrowPhase, IssueStatus, Prisma, SubmissionStatus } from "@bloody-roar/database";
 import { computeDeliveryHash } from "@bloody-roar/shared/escrow";
 import { z } from "zod";
 import { builder } from "../../builder";
@@ -10,6 +10,7 @@ import { SubmissionRef, SUBMISSION_INCLUDE } from "./submission.module";
 import { PreparedCallRef } from "../escrow/release.module";
 import { createPreparedCall, escrowTarget } from "../../../lib/escrow/prepare";
 import { guardMessage } from "../../../ai/guard/service";
+import { getSocketIO, toMessagePayload } from "../../../socket/handlers";
 
 import { assertSubmissionTestsPassed } from "../../../lib/test-runs";
 
@@ -144,7 +145,7 @@ builder.mutationField("requestChanges", (t) => t.field({
     const notes = parseOrThrow(z.string().trim().min(1).max(2000), args.notes);
     for (let attempt = 0; ; attempt++) {
       try {
-        return await ctx.db.$transaction(async (tx) => {
+        const { changed, message } = await ctx.db.$transaction(async (tx) => {
           const initial = await tx.submission.findUnique({ where: { id: String(args.submissionId) } });
           if (!initial) throw gqlError("Submission not found", "NOT_FOUND");
           await tx.$queryRaw`SELECT id FROM issues WHERE id = ${initial.issueId} FOR UPDATE`;
@@ -161,10 +162,14 @@ builder.mutationField("requestChanges", (t) => t.field({
             body: notes, link: `/issues/${submission.issueId}`, data: { issueId: submission.issueId, submissionId: submission.id },
             dedupeKey: `changes:${submission.id}:${notesHash}` });
           if (notification) await tx.$executeRaw`SELECT pg_notify(${NOTIFICATION_CREATED_CHANNEL}, ${JSON.stringify({ userId: submission.developerId, id: notification.id })})`;
-          await postSystemMessage(tx, submission.issue, user.id, "Changes requested", `changes:${submission.id}:${notesHash}:sys`);
-          await tx.$executeRaw`SELECT pg_notify(${PROJECTION_CHANGED_CHANNEL}, ${JSON.stringify({ escrowId: projection.id, issueId: submission.issueId, projectionVersion: projection.projectionVersion })})`;
-          return changed;
+          const message = await postSystemMessage(tx, submission.issue, user.id, "Changes requested", `changes:${submission.id}:${notesHash}:sys`);
+          return { changed, message };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        if (message) {
+          getSocketIO().to(`conv:${message.conversationId}`).emit("message:new", toMessagePayload(message, message.sender));
+          getSocketIO().to(`user:${changed.developerId}`).emit("inbox:update", { conversationId: message.conversationId, lastMessageAt: message.createdAt.toISOString(), unreadDelta: 1 });
+        }
+        return changed;
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2034" || attempt >= 4) throw error;
         await new Promise((resolve) => setTimeout(resolve, 20 * 2 ** attempt));

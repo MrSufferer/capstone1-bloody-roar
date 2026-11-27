@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { createHash, randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { prisma } from "@bloody-roar/database";
+import { Client } from "pg";
+import { PROJECTION_CHANGED_CHANNEL, prisma } from "@bloody-roar/database";
 import { assertTestDatabase } from "@bloody-roar/database/test-guard";
 import { computeDeliveryHash, type DeliveryManifest } from "@bloody-roar/shared/escrow";
 import { execute, loadSchema } from "./graphql-execute";
@@ -63,9 +64,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("Submission on the test database
     }
     await prisma.escrowProjection.update({ where: { escrowIdHash }, data: { deliveryHash: initial.deliveryHash } });
     expect((await execute(CHANGES, { user: outsider, db: prisma }, { id: initial.id })).errors?.[0]?.extensions?.code).toBe("FORBIDDEN");
+    const emitted: [string, string, { type?: string; content?: string; conversationId?: string; unreadDelta?: number }][] = [];
+    (global as Record<string, unknown>).__socketIO = { to: (room: string) => ({ emit: (event: string, payload: { type?: string; content?: string; conversationId?: string; unreadDelta?: number }) => emitted.push([room, event, payload]) }) };
+    const listener = new Client({ connectionString: process.env.TEST_DATABASE_URL });
+    const projectionEvents: string[] = [];
+    await listener.connect(); listener.on("notification", (msg) => projectionEvents.push(msg.payload ?? "")); await listener.query(`LISTEN ${PROJECTION_CHANGED_CHANNEL}`);
     expect((await execute(CHANGES, { user: client, db: prisma }, { id: initial.id })).errors).toBeUndefined();
     expect(await prisma.notification.count({ where: { userId: developer.id, type: "CHANGES_REQUESTED", data: { path: ["issueId"], equals: issueId } } })).toBe(1);
     expect((await execute(CHANGES, { user: client, db: prisma }, { id: initial.id })).errors).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 200)); await listener.end();
+    expect(projectionEvents.filter((payload) => payload.includes(issueId))).toEqual([]);
+    const conversation = await prisma.conversation.findFirstOrThrow({ where: { issueId, kind: "ISSUE_WORK" } });
+    expect(emitted.map(([room, event, payload]) => [room, event, payload.type ?? payload.conversationId, payload.content ?? payload.unreadDelta])).toEqual([
+      [`conv:${conversation.id}`, "message:new", "SYSTEM", "Changes requested"], [`user:${developer.id}`, "inbox:update", conversation.id, 1]]);
     expect((await prisma.message.findMany({ where: { issueId, type: "SYSTEM" } })).map((m) => ({ content: m.content, senderId: m.senderId, clientMessageId: m.clientMessageId })))
       .toEqual([{ content: "Changes requested", senderId: client.id, clientMessageId: `changes:${initial.id}:${sha("please revise")}:sys` }]);
     expect((await execute(CHANGES, { user: client, db: prisma }, { id: initial.id, notes: "also fix the tests" })).errors).toBeUndefined();
