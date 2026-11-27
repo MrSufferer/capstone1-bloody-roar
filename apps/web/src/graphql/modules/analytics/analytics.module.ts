@@ -5,7 +5,7 @@ import { gqlError } from "../../errors";
 
 type AssetStats = { chainId: number; contractAddress: string; grossRaw: string; developerRaw: string; clientRaw: string; feeRaw: string; claimableRaw: string };
 type UserAssetStats = Pick<AssetStats, "chainId" | "contractAddress" | "developerRaw" | "claimableRaw">;
-type UserStats = { postedTasks: number; workingTasks: number; completedTasks: number; applications: number; completedPayouts: number; assets: UserAssetStats[] };
+type UserStats = { postedTasks: number; workingTasks: number; completedTasks: number; applications: number; completedPayouts: number; wallet: string };
 type AdminStats = { users: number; openTasks: number; activeTasks: number; completedTasks: number; openDisputes: number; completedBounties: TokenAmountValue[];
   assets: AssetStats[]; disputeRateBps: number; meanDisputeResolutionSeconds: string | null };
 const AssetStatsRef = builder.objectRef<AssetStats>("EscrowAssetStats").implement({ fields: (t) => ({
@@ -17,7 +17,20 @@ const UserAssetStatsRef = builder.objectRef<UserAssetStats>("UserEscrowAssetStat
 }) });
 const UserStatsRef = builder.objectRef<UserStats>("UserStats").implement({ fields: (t) => ({
   postedTasks: t.exposeInt("postedTasks"), workingTasks: t.exposeInt("workingTasks"), completedTasks: t.exposeInt("completedTasks"),
-  applications: t.exposeInt("applications"), completedPayouts: t.exposeInt("completedPayouts"), assets: t.field({ type: [UserAssetStatsRef], resolve: (s) => s.assets }),
+  applications: t.exposeInt("applications"), completedPayouts: t.exposeInt("completedPayouts"),
+  assets: t.field({
+    type: [UserAssetStatsRef],
+    resolve: async ({ wallet }, _args, ctx) => {
+      const [paid, balances] = await Promise.all([
+        ctx.db.escrowProjection.groupBy({ by: ["chainId", "contractAddress"], where: { developer: { equals: wallet, mode: "insensitive" }, phase: EscrowPhase.RESOLVED }, _sum: { developerAmountRaw: true } }),
+        ctx.db.claimableBalance.groupBy({ by: ["chainId", "contractAddress"], where: { address: { equals: wallet, mode: "insensitive" } }, _sum: { amountRaw: true } }),
+      ]);
+      const groups = assetMap();
+      for (const row of paid) { const group = groups.get(row.chainId, row.contractAddress); group.developerRaw = add(group.developerRaw, raw(row._sum.developerAmountRaw)); }
+      for (const row of balances) { const group = groups.get(row.chainId, row.contractAddress); group.claimableRaw = add(group.claimableRaw, raw(row._sum.amountRaw)); }
+      return [...groups.assets.values()];
+    },
+  }),
 }) });
 const AdminStatsRef = builder.objectRef<AdminStats>("AdminStats").implement({ fields: (t) => ({
   users: t.exposeInt("users"), openTasks: t.exposeInt("openTasks"), activeTasks: t.exposeInt("activeTasks"), completedTasks: t.exposeInt("completedTasks"),
@@ -44,25 +57,21 @@ builder.queryFields((t) => ({
     type: UserStatsRef,
     args: { userId: t.arg.id() },
     resolve: async (_root, args, ctx) => {
-      const id = args.userId ? String(args.userId) : requireAuth(ctx).id;
-      const user = await ctx.db.user.findUnique({ where: { id }, select: { id: true, walletAddress: true } });
+      const user = args.userId
+        ? await ctx.db.user.findUnique({ where: { id: String(args.userId) }, select: { id: true, walletAddress: true } })
+        : requireAuth(ctx);
       if (!user) throw gqlError("User not found", "NOT_FOUND");
-      const wallet = user.walletAddress;
+      const { id, walletAddress: wallet } = user;
       const party = { OR: [{ client: { equals: wallet, mode: "insensitive" as const } }, { developer: { equals: wallet, mode: "insensitive" as const } }] };
       const developer = { developer: { equals: wallet, mode: "insensitive" as const } };
-      const [postedTasks, workingTasks, completedTasks, applications, completedPayouts, paid, balances] = await Promise.all([
+      const [postedTasks, workingTasks, completedTasks, applications, completedPayouts] = await Promise.all([
         ctx.db.issue.count({ where: { clientId: id, isDraft: false, hiddenAt: null } }),
         ctx.db.escrowProjection.count({ where: { ...developer, phase: { notIn: [EscrowPhase.NONE, EscrowPhase.RESOLVED] } } }),
         ctx.db.escrowProjection.count({ where: { ...party, phase: EscrowPhase.RESOLVED } }),
         ctx.db.application.count({ where: { developerId: id } }),
         ctx.db.escrowProjection.count({ where: { ...developer, phase: EscrowPhase.RESOLVED, developerAmountRaw: { gt: 0 } } }),
-        ctx.db.escrowProjection.groupBy({ by: ["chainId", "contractAddress"], where: { ...developer, phase: EscrowPhase.RESOLVED }, _sum: { developerAmountRaw: true } }),
-        ctx.db.claimableBalance.groupBy({ by: ["chainId", "contractAddress"], where: { address: { equals: wallet, mode: "insensitive" } }, _sum: { amountRaw: true } }),
       ]);
-      const groups = assetMap();
-      for (const row of paid) { const group = groups.get(row.chainId, row.contractAddress); group.developerRaw = add(group.developerRaw, raw(row._sum.developerAmountRaw)); }
-      for (const row of balances) { const group = groups.get(row.chainId, row.contractAddress); group.claimableRaw = add(group.claimableRaw, raw(row._sum.amountRaw)); }
-      return { postedTasks, workingTasks, completedTasks, applications, completedPayouts, assets: [...groups.assets.values()] };
+      return { postedTasks, workingTasks, completedTasks, applications, completedPayouts, wallet };
     },
   }),
   adminStats: t.field({

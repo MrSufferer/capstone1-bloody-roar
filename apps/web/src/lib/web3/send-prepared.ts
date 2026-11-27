@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
-import { ACTIVE_CHAIN, ensureActiveChain, getWalletKind } from "./client";
+import { ACTIVE_CHAIN, ensureActiveChain } from "./client";
+import { getWalletKind } from "./wallet-kind";
 
 // One call the server prepared for the wallet to sign and send.
 export type PreparedCall = { intentId: string; contractAddress: string; data: string; value: string };

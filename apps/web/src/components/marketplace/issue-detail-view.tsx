@@ -42,8 +42,7 @@ const ISSUE_QUERY = `
     issue(id: $id) {
       id title description category status githubRepo bountyAmount { formatted raw decimals } requiredSkills difficulty timeEstimate
       expiresAt viewCount applicationCount createdAt clientId developerId noExecutableTests
-      viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout similarFixIssueId }
-      escrow { amountRaw availableActions { action reasonDisabled } }
+      escrow { amountRaw }
       reservation @include(if: $initial) { id status amountRaw }
       ownerApplications @include(if: $includeApplications) {
         id status message createdAt reuseOfIssueId
@@ -57,6 +56,15 @@ const ISSUE_QUERY = `
       attachments { id fileName fileUrl fileMime }
       client { id name avatar walletAddress reputationScore isGithubVerified }
       developer { id name avatar walletAddress reputationScore isGithubVerified }
+    }
+  }
+`;
+
+const ACTIONS_QUERY = `
+  query IssueActions($id: ID!) {
+    issue(id: $id) {
+      viewerCapabilities { canApply canSelect canFund canSubmit canRelease canRequestChanges canDispute canProposeSettlement canRevokeSettlement canAcceptSettlement canSubmitEvidence canChallengeRuling canFinalizeRuling canFinalizeArbiterTimeoutSplit canClaimMissedDeliveryRefund canClaimReviewTimeout similarFixIssueId }
+      escrow { availableActions { action reasonDisabled } }
     }
   }
 `;
@@ -101,7 +109,7 @@ type PreparedStep = { intentId: string; method: string; contractAddress: string;
 type ReservationRow = { id: string; status: string; chainId: number; contractAddress: string; tokenAddress: string; escrowKey: string; termsHash: string; amountRaw: string; deliveryDeadline: string; clientWallet: string; developerWallet: string };
 
 type ViewerCapabilities = { canApply?: boolean; canSelect: boolean; canFund: boolean; canSubmit: boolean; canRelease: boolean; canRequestChanges: boolean; canDispute: boolean; canProposeSettlement: boolean; canRevokeSettlement: boolean; canAcceptSettlement: boolean; canSubmitEvidence: boolean; canChallengeRuling: boolean; canFinalizeRuling: boolean; canFinalizeArbiterTimeoutSplit: boolean; canClaimMissedDeliveryRefund: boolean; canClaimReviewTimeout: boolean; similarFixIssueId?: string | null };
-type IssueDetail = IssueItem & { noExecutableTests: boolean; githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { amountRaw?: string; availableActions: Array<{ action: string; reasonDisabled: string | null }> } | null };
+type IssueDetail = IssueItem & { noExecutableTests: boolean; githubRepo?: string | null; bountyRaw: string; bountyDecimals: number; clientId: string; developerId?: string | null; developer?: IssueItem["client"] | null; viewerCapabilities?: ViewerCapabilities | null; escrow?: { amountRaw?: string; availableActions?: Array<{ action: string; reasonDisabled: string | null }> } | null };
 type Application = { id: string; status: string; message?: string | null; createdAt: string; reuseOfIssueId?: string | null; developer: IssueItem["client"] & { skills?: string[] } };
 
 type DetailResponse = { issue: (Omit<IssueDetail, "bountyAmount" | "bountyRaw" | "bountyDecimals"> & {
@@ -126,6 +134,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const queryClient = useQueryClient();
   const currentView = useRef({ issueId, userId: user?.id });
   currentView.current = { issueId, userId: user?.id };
+  const actionRequest = useRef(0);
   const { theme } = useUiPreferences();
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -155,6 +164,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const [reviewNotes, setReviewNotes] = useState("");
   const [activeTab, setActiveTab] = useState<"overview" | "delivery" | "chat" | "escrow">("overview");
   const [isLoading, setIsLoading] = useState(true);
+  const [actionsUnavailable, setActionsUnavailable] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useToastState("error");
   const [, setNotice] = useToastState("success");
@@ -175,10 +185,13 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
   const load = useCallback(async (scope: "overview" | "initial" | "applications" = "overview") => {
     const isCurrent = () => currentView.current.issueId === issueId && currentView.current.userId === user?.id;
     if (!isCurrent()) return;
+    const request = ++actionRequest.current;
+    setActionsUnavailable(false);
     const initial = scope === "initial";
     const includeApplications = scope !== "overview";
     const key = ["issue-detail", issueId, user?.id ?? null];
     const variables = { id: issueId, initial, includeApplications };
+    let found = false;
     try {
       const result = initial
         ? await queryClient.fetchQuery({
@@ -190,6 +203,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
         : await graphqlRequest<DetailResponse>(ISSUE_QUERY, variables);
       if (!isCurrent()) return;
       const next = result.issue;
+      found = Boolean(next);
       queryClient.setQueryData<DetailResponse["issue"]>(key, (cached) => initial || !next ? next : { ...cached, ...next });
       if (next) {
         checksRequired.current = !next.noExecutableTests;
@@ -218,6 +232,18 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
       if (isCurrent()) setError(reason instanceof Error ? reason.message : "Bounty not found.");
     } finally {
       if (isCurrent()) setIsLoading(false);
+    }
+    if (!found || !user?.id || !isCurrent() || actionRequest.current !== request) return;
+    try {
+      const { issue: actions } = await graphqlRequest<{ issue: Pick<IssueDetail, "viewerCapabilities" | "escrow"> | null }>(ACTIONS_QUERY, { id: issueId });
+      if (!actions || !isCurrent() || actionRequest.current !== request) return;
+      setIssue((current) => current?.id === issueId ? {
+        ...current,
+        viewerCapabilities: actions.viewerCapabilities ?? null,
+        escrow: current.escrow ? { ...current.escrow, availableActions: actions.escrow?.availableActions ?? [] } : null,
+      } : current);
+    } catch {
+      if (isCurrent() && actionRequest.current === request) setActionsUnavailable(true);
     }
   }, [issueId, queryClient, user?.id, setError]);
 
@@ -275,7 +301,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
 
   const isClient = Boolean(user && issue?.clientId === user.id);
   // The server's availability entry for an action; absent means the action does not apply to this task right now.
-  const actionOf = (name: string) => issue?.escrow?.availableActions.find((item) => item.action === name) ?? null;
+  const actionOf = (name: string) => issue?.escrow?.availableActions?.find((item) => item.action === name) ?? null;
   const actionEnabled = (name: string) => { const entry = actionOf(name); return Boolean(entry && !entry.reasonDisabled); };
   const reasonLine = (name: string) => { const reason = actionOf(name)?.reasonDisabled; return reason ? <p className="mut" style={{ fontSize: 12 }}>{reason}</p> : null; };
   // The card shows only when the server lists an action or evidence step for this viewer; the status check lives there.
@@ -401,6 +427,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
 
   const apply = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!issue?.viewerCapabilities?.canApply) return;
     setIsWorking(true); setError(null); setNotice(null);
     try {
       const reuseOfIssueId = reuseFix ? issue?.viewerCapabilities?.similarFixIssueId : null;
@@ -563,6 +590,10 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
     <div className={`br ${theme === "dark" ? "dark" : ""}`}>
       <main className="wrap">
         <div className="content" style={{ flexBasis: "100%", display: "flex", flexDirection: "column", gap: 16 }}>
+          {actionsUnavailable && <div role="status" className="flex items-center gap-3 text-sm">
+            <span>Bounty actions could not be loaded.</span>
+            <Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button>
+          </div>}
           {/* Breadcrumbs */}
           <div style={{ fontSize: "12.5px", color: "var(--ink-3)" }}>
             <Link href="/marketplace" style={{ color: "var(--ink-2)", display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -1299,7 +1330,7 @@ export function IssueDetailView({ issueId }: { issueId: string }) {
                               Reuse my fix of issue BR-{issue.viewerCapabilities.similarFixIssueId.slice(0, 8)} for {reusePrice} {issue.token.symbol} ({REUSE_PRICE_BPS / 100}% of the bounty)
                             </label>
                           )}
-                          <button type="submit" className="btn btn-p" disabled={isWorking || Boolean(issue.viewerCapabilities && !issue.viewerCapabilities.canApply)}>
+                          <button type="submit" className="btn btn-p" disabled={isWorking || issue.viewerCapabilities?.canApply !== true}>
                             <MessageSquare className="ico" style={{ width: 14, height: 14 }} /> Apply to this task
                           </button>
                         </form>

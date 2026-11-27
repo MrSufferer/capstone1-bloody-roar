@@ -8,6 +8,16 @@ import { readChainTime } from "../../../lib/escrow/chain-time";
 import { availableActions, type AvailableAction } from "../../../lib/escrow/availability";
 import type { EscrowProjection, RulingRecord } from "@bloody-roar/database";
 
+const chainTimes = new WeakMap<GraphQLContext, Map<number, Promise<Date>>>();
+
+function chainTimeFor(ctx: GraphQLContext, chainId: number) {
+  const times = chainTimes.get(ctx) ?? new Map<number, Promise<Date>>();
+  chainTimes.set(ctx, times);
+  const time = times.get(chainId) ?? readChainTime(chainId, { timeout: 2500, retryCount: 0 });
+  times.set(chainId, time);
+  return time;
+}
+
 const ActionRef = builder.objectRef<AvailableAction>("EscrowAvailableAction").implement({ fields: (t) => ({
   action: t.exposeString("action"), enabledAt: t.exposeString("enabledAt", { nullable: true }), reasonDisabled: t.exposeString("reasonDisabled", { nullable: true }),
 }) });
@@ -28,7 +38,10 @@ const EscrowProjectionRef = builder.prismaObject("EscrowProjection", { fields: (
   phase: t.expose("phase", { type: EscrowPhaseEnum }), resolutionKind: t.expose("resolutionKind", { type: ResolutionKindEnum }),
   settlementProposer: t.exposeString("settlementProposer", { nullable: true }), settlementClientBps: t.exposeInt("settlementClientBps", { nullable: true }),
   projectionVersion: t.exposeInt("projectionVersion"), orphan: t.exposeBoolean("orphan"),
-  availableActions: t.field({ type: [ActionRef], resolve: async (p, _args, ctx) => availableActions(p, await readChainTime(p.chainId), await currentRuling(ctx.db, p)) }),
+  availableActions: t.field({ type: [ActionRef], resolve: async (p, _args, ctx) => {
+    const [time, ruling] = await Promise.all([chainTimeFor(ctx, p.chainId), currentRuling(ctx.db, p)]);
+    return availableActions(p, time, ruling);
+  } }),
 }) });
 
 type Capabilities = { canApply: boolean; canSelect: boolean; canFund: boolean; canSubmit: boolean; canRelease: boolean; canDispute: boolean;
@@ -68,8 +81,9 @@ builder.prismaObjectFields(IssueRef, (t) => ({
       user ? ctx.db.application.findUnique({ where: { issueId_developerId: { issueId: issue.id, developerId: user.id } }, select: { status: true } }) : null,
       user ? ctx.db.issueSimilarity.findFirst({ where: { issueId: issue.id, developerId: user.id }, orderBy: { score: "desc" }, select: { similarIssueId: true } }) : null,
     ]);
-    const ruling = projection ? await currentRuling(ctx.db, projection) : null;
-    const chainNow = projection ? await readChainTime(projection.chainId) : now;
+    const [ruling, chainNow] = projection
+      ? await Promise.all([currentRuling(ctx.db, projection), chainTimeFor(ctx, projection.chainId)])
+      : [null, now];
     const actions = projection ? availableActions(projection, chainNow, ruling) : [];
     const enabled = (action: string) => actions.some((a) => a.action === action && !a.reasonDisabled);
     const wallet = enabledUser ? user!.walletAddress.toLowerCase() : "";

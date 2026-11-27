@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACTIVE_CHAIN, setWalletKind } from "../lib/web3/client";
+import { ACTIVE_CHAIN } from "../lib/web3/client";
+import { setWalletKind } from "../lib/web3/wallet-kind";
 import { sendPreparedCalls, walletSigner } from "../lib/web3/send-prepared";
 import { inAppEthersSigner, restoreInAppAccount } from "@/lib/web3/in-app";
 

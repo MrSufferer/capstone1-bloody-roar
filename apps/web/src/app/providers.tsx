@@ -31,6 +31,9 @@ export function Providers({ children, initialUser }: { children: ReactNode; init
   }, [authStore, initialUser]);
 
   useEffect(() => authStore.subscribe((state, previous) => {
+    if (previous.user && previous.user.id !== state.user?.id) {
+      queryClient.removeQueries({ queryKey: ["dashboard", previous.user.id] });
+    }
     if (previous.user && !state.user) {
       queryClient.removeQueries({ queryKey: ["issue-detail"] });
       queryClient.removeQueries({ queryKey: ["notifications"] });

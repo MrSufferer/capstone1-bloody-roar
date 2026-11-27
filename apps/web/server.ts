@@ -145,7 +145,7 @@ app.prepare().then(async () => {
     // Dev compiles routes on first request; pre-compile them in the background so the first click is fast.
     if (dev && process.env.WARM_ROUTES !== "0") {
       void (async () => {
-        for (const route of ["/", "/marketplace", "/dashboard", "/issues/create", "/guide", "/profile", "/messages", "/admin"]) {
+        for (const route of ["/", "/marketplace", "/guide", "/dashboard", "/profile", "/messages", "/issues/create", "/admin"]) {
           await fetch(`http://localhost:${port}${route}`, { redirect: "manual" }).catch(() => undefined);
         }
         try {

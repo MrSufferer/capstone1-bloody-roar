@@ -31,6 +31,15 @@ function fakeDb() {
 }
 
 describe("issues DEADLINE sort", () => {
+  it("skips the total count when only the page is requested", async () => {
+    const db = fakeDb();
+    const result = await execute("{ issues(first: 1) { edges { cursor } pageInfo { hasNextPage } } }", { user: null, db });
+
+    expect(result.errors).toBeUndefined();
+    expect(db.issue.findMany).toHaveBeenCalledTimes(1);
+    expect(db.issue.count).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["ASC", "asc"],
     ["DESC", "desc"],
@@ -38,7 +47,7 @@ describe("issues DEADLINE sort", () => {
     const db = fakeDb();
 
     const result = await execute(
-      "query($sortOrder: SortOrder) { issues(sortBy: DEADLINE, sortOrder: $sortOrder) { totalCount } }",
+      "query($sortOrder: SortOrder) { issues(sortBy: DEADLINE, sortOrder: $sortOrder) { edges { cursor } } }",
       { user: null, db },
       { sortOrder },
     );

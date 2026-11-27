@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { dashboardQueryOptions } from "@/components/dashboard/dashboard-query";
 import { MessagesLink } from "@/components/chat/messages-link";
 import { Plus } from "lucide-react";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -16,6 +18,7 @@ import React, { useState, useEffect } from "react";
 export function Navbar() {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
+  const queryClient = useQueryClient();
   const { t } = useUiPreferences();
 
   const [isMounted, setIsMounted] = useState(false);
@@ -27,6 +30,11 @@ export function Navbar() {
   const isMarketplace = pathname === "/" || pathname === "/marketplace";
   const isDashboard = pathname.startsWith("/dashboard");
   const isAdmin = pathname.startsWith("/admin");
+  const prefetchDashboard = () => {
+    if (user && user.role !== "ADMIN" && !isDashboard) {
+      void queryClient.prefetchQuery(dashboardQueryOptions(user.id));
+    }
+  };
 
   return (
     <header className="top sticky top-0 z-40 w-full">
@@ -48,6 +56,7 @@ export function Navbar() {
             </Link>
             <Link
               href="/guide"
+              prefetch
               className=""
             >
               Guide
@@ -55,6 +64,8 @@ export function Navbar() {
             {isMounted && user && (
               <Link
                 href={user.role === "ADMIN" ? "/admin" : "/dashboard"}
+                onPointerEnter={prefetchDashboard}
+                onFocus={prefetchDashboard}
                 className={isAdmin || isDashboard ? "on" : ""}
               >
                 {user.role === "ADMIN" ? t("admin") : t("dashboard")}

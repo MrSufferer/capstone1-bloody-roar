@@ -3,6 +3,7 @@
 
 import { toast } from "@/lib/toast";
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { X, AlertCircle } from "lucide-react";
 import { WolfLogo } from "@/components/ui/wolf-logo";
@@ -14,10 +15,10 @@ import {
   hasInjectedProvider,
   connectInjectedWallet,
   ensureActiveChain,
-  setWalletKind,
   signMessageWithInjected,
 } from "../../lib/web3/client";
 import type { WalletOption } from "../../lib/web3/client";
+import { setWalletKind } from "@/lib/web3/wallet-kind";
 import type * as InAppWallet from "@/lib/web3/in-app";
 
 interface ConnectModalProps {
@@ -302,9 +303,9 @@ export function ConnectModal({ isOpen, onClose }: ConnectModalProps) {
 
                   <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
                     We never ask for your seed phrase. By signing in you accept the{" "}
-                    <a href="/guide" style={{ color: "var(--link)" }}>
+                    <Link href="/guide" prefetch onClick={onClose} style={{ color: "var(--link)" }}>
                       escrow rules
-                    </a>
+                    </Link>
                     .
                   </p>
                 </div>

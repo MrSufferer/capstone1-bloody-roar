@@ -18,7 +18,7 @@ const person = (id: string) => ({ id, name: id, walletAddress: "0x11111111111111
 function mockIssue(similarFixIssueId: string | null, extra: Record<string, unknown> = {}) {
   request.mockReset();
   request.mockImplementation(async (query: string) => {
-    if (query.includes("query IssueDetail")) return { issue: {
+    if (query.includes("query IssueDetail") || query.includes("query IssueActions")) return { issue: {
       id: "issue", title: "Fix login", description: "Login spins.", category: "BUG_FIX", status: "OPEN", noExecutableTests: false,
       bountyAmount: { formatted: "100", raw: "100000000", decimals: 6 }, clientId: "client", developerId: null, client: person("client"),
       token: { symbol: "USDC", name: "USD Coin" }, requiredSkills: [], createdAt: "2026-11-17T00:00:00Z", viewCount: 0,
@@ -64,7 +64,7 @@ describe("similar fix label (US-107)", () => {
       if (query.includes("mutation Apply")) status = "PENDING";
       if (query.includes("mutation WithdrawApp")) status = "WITHDRAWN";
       const result = await baseRequest(query);
-      if (!query.includes("query IssueDetail")) return result;
+      if (!query.includes("query IssueDetail") && !query.includes("query IssueActions")) return result;
       const application = status ? { id: "app", status, message: "Saved cover note" } : null;
       return { issue: {
         ...result.issue,
@@ -124,7 +124,7 @@ it("updates the escrow total when selecting a reuse application and cancelling i
     }
     if (query.includes("query IssueApplications")) return { applications };
     const result = await baseRequest(query);
-    if (!query.includes("query IssueDetail")) return result;
+    if (!query.includes("query IssueDetail") && !query.includes("query IssueActions")) return result;
     return { issue: {
       ...result.issue,
       status: reserved ? "AWAITING_FUNDING" : "OPEN",

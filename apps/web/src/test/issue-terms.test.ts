@@ -241,7 +241,7 @@ describe("issues bounty filters", () => {
     );
 
     expect(result.errors).toBeUndefined();
-    expect(db.issue.findMany.mock.calls[0]?.[0].where).toEqual(
+    expect(db.issue.count.mock.calls[0]?.[0].where).toEqual(
       expect.objectContaining({ bountyAmount: { gte: "10.5", lte: "250" } }),
     );
   });

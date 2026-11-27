@@ -220,10 +220,14 @@ type PageInfoShape = {
   endCursor: string | null;
 };
 
-type IssueConnectionShape = {
+type IssuePageShape = {
   edges: IssueEdgeShape[];
   pageInfo: PageInfoShape;
-  totalCount: number;
+};
+
+type IssueConnectionShape = {
+  page: () => Promise<IssuePageShape>;
+  count: () => Promise<number>;
 };
 
 const IssueEdgeRef = builder.objectRef<IssueEdgeShape>("IssueEdge").implement({
@@ -249,13 +253,13 @@ const IssueConnectionRef = builder.objectRef<IssueConnectionShape>("IssueConnect
   fields: (t) => ({
     edges: t.field({
       type: [IssueEdgeRef],
-      resolve: (conn) => conn.edges,
+      resolve: async (conn) => (await conn.page()).edges,
     }),
     pageInfo: t.field({
       type: PageInfoRef,
-      resolve: (conn) => conn.pageInfo,
+      resolve: async (conn) => (await conn.page()).pageInfo,
     }),
-    totalCount: t.exposeInt("totalCount"),
+    totalCount: t.int({ resolve: (conn) => conn.count() }),
   }),
 });
 
@@ -463,36 +467,34 @@ builder.queryField("issues", (t) =>
         if (!cursorIssue)
           throw gqlError("Cursor does not belong to the current bounty list", "INVALID_CURSOR");
       }
-      // totalCount does not depend on the page rows, so run both queries together.
-      const [rows, totalCount] = await Promise.all([
-        ctx.db.issue.findMany({
+      const fetchPage = async () => {
+        const rows = await ctx.db.issue.findMany({
           where,
           orderBy,
           take: take + 1,
           ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
           include: ISSUE_INCLUDE,
-        }),
-        ctx.db.issue.count({ where }),
-      ]);
+        });
+        const hasNextPage = rows.length > take;
+        const issues = hasNextPage ? rows.slice(0, take) : rows;
+        const firstIssue = issues[0];
+        const lastIssue = issues.at(-1);
+        return {
+          edges: issues.map((issue) => ({ node: issue, cursor: encodeCursor(issue.id) })),
+          pageInfo: {
+            hasNextPage,
+            hasPreviousPage: Boolean(q.after),
+            startCursor: firstIssue ? encodeCursor(firstIssue.id) : null,
+            endCursor: lastIssue ? encodeCursor(lastIssue.id) : null,
+          },
+        };
+      };
 
-      const hasNextPage = rows.length > take;
-      const issues = hasNextPage ? rows.slice(0, take) : rows;
-
-      const firstIssue = issues[0];
-      const lastIssue = issues[issues.length - 1];
-
+      let page: Promise<IssuePageShape> | undefined;
+      let count: Promise<number> | undefined;
       return {
-        edges: issues.map((issue) => ({
-          node: issue,
-          cursor: encodeCursor(issue.id),
-        })),
-        pageInfo: {
-          hasNextPage,
-          hasPreviousPage: Boolean(q.after),
-          startCursor: firstIssue ? encodeCursor(firstIssue.id) : null,
-          endCursor: lastIssue ? encodeCursor(lastIssue.id) : null,
-        },
-        totalCount,
+        page: () => page ??= fetchPage(),
+        count: () => count ??= ctx.db.issue.count({ where }),
       };
     },
   }),

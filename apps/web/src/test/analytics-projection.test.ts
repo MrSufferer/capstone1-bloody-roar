@@ -23,6 +23,16 @@ function fakeDb() {
 }
 const query = `query($id: ID) { userStats(userId: $id) { postedTasks workingTasks completedTasks completedPayouts assets { chainId contractAddress developerRaw claimableRaw } } }`;
 describe("projection-based analytics", () => {
+  it("skips balance aggregation when the dashboard only requests counters", async () => {
+    const db = fakeDb();
+    const result = await execute("{ userStats { postedTasks completedPayouts } }", { user, db });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.userStats).toMatchObject({ postedTasks: 1, completedPayouts: 1 });
+    expect(db.user.findUnique).not.toHaveBeenCalled();
+    expect(db.escrowProjection.groupBy).not.toHaveBeenCalled();
+    expect(db.claimableBalance.groupBy).not.toHaveBeenCalled();
+  });
   it("allows public userStats and preserves integer precision", async () => {
     const db = fakeDb(); const result = await execute(query, { user: null, db }, { id: user.id });
     expect(result.errors).toBeUndefined();
