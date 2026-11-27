@@ -43,6 +43,7 @@ export async function undoDeposit(tx: Prisma.TransactionClient, eventId: string,
   await tx.fundingReservation.update({ where: { id: reservation.id }, data: { status: snapshot.reservation.status, fundedAt: snapshot.reservation.fundedAt ? new Date(snapshot.reservation.fundedAt) : null } });
   await tx.issue.update({ where: { id: issue.id }, data: { status: snapshot.issue.status, developerId: snapshot.issue.developerId } });
   await tx.notification.deleteMany({ where: { dedupeKey: { startsWith: `${eventId}:` } } });
+  await tx.message.deleteMany({ where: { type: "SYSTEM", clientMessageId: { startsWith: `${eventId}:` } } });
 }
 
 export type WorkUndo = {
@@ -75,6 +76,7 @@ export async function undoWork(tx: Prisma.TransactionClient, eventId: string, sn
   }
   for (const intent of snapshot.intents) await tx.transactionIntent.updateMany({ where: { id: intent.id, confirmedByEventId: eventId }, data: { status: intent.status, confirmedByEventId: intent.confirmedByEventId } });
   await tx.notification.deleteMany({ where: { dedupeKey: { startsWith: `${eventId}:` } } });
+  await tx.message.deleteMany({ where: { type: "SYSTEM", clientMessageId: { startsWith: `${eventId}:` } } });
 }
 
 export type ResolvedUndo = {
@@ -120,6 +122,7 @@ export async function undoResolved(tx: Prisma.TransactionClient, eventId: string
   }
   for (const intent of snapshot.intents) await tx.transactionIntent.updateMany({ where: { id: intent.id, confirmedByEventId: eventId }, data: { status: intent.status, confirmedByEventId: intent.confirmedByEventId } });
   await tx.notification.deleteMany({ where: { dedupeKey: { startsWith: `${eventId}:` } } });
+  await tx.message.deleteMany({ where: { type: "SYSTEM", clientMessageId: { startsWith: `${eventId}:` } } });
   if (snapshot.dispute) await undoDispute(tx, eventId, snapshot.dispute);
 }
 

@@ -11,3 +11,10 @@ export async function ensureWorkConversation(tx: Prisma.TransactionClient, issue
   }
   return conversation;
 }
+
+export async function postSystemMessage(tx: Prisma.TransactionClient, issue: { id: string; clientId: string; developerId: string | null }, senderId: string, content: string, clientMessageId: string) {
+  const conversation = await ensureWorkConversation(tx, issue);
+  if (await tx.message.findFirst({ where: { conversationId: conversation.id, clientMessageId }, select: { id: true } })) return;
+  const message = await tx.message.create({ data: { conversationId: conversation.id, issueId: issue.id, senderId, content, type: "SYSTEM", clientMessageId } });
+  await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: message.createdAt } });
+}
