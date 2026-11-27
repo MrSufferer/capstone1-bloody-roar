@@ -132,7 +132,7 @@ describe("requestChanges", () => {
       notification: { createMany: vi.fn(async (_args: { data: Array<Record<string, unknown>> }) => ({ count: 1 })), findUniqueOrThrow: vi.fn(async () => ({ id: "notification" })) },
       conversation: { findFirst: async () => ({ id: "conversation" }), update: async () => ({}) },
       conversationParticipant: { deleteMany: async () => ({ count: 0 }), upsert: async () => ({}) },
-      message: { findFirst: async () => null, create: vi.fn(async (args: { data: Record<string, unknown> }) => ({ ...args.data, id: "message", createdAt: new Date(), attachments: [], sender: { id: client.id, name: null, avatar: null } })) } };
+      message: { createMany: vi.fn(async (_args: { data: Record<string, unknown> }) => ({ count: 1 })), findUniqueOrThrow: vi.fn(async () => ({ id: "message", type: "SYSTEM", content: "Changes requested", createdAt: new Date(), attachments: [], sender: { id: client.id, name: null, avatar: null } })) } };
     const emit = vi.fn();
     (global as Record<string, unknown>).__socketIO = { to: () => ({ emit }) };
     return { submission, chain, tx, emit, $transaction: vi.fn(async (fn: (value: typeof tx) => unknown) => fn(tx)) };
@@ -143,7 +143,7 @@ describe("requestChanges", () => {
     expect(result.errors).toBeUndefined();
     expect(database.tx.submission.update.mock.calls[0]![0].data).toMatchObject({ changesRequested: true, reviewNotes: "please revise" });
     expect(database.tx.notification.createMany.mock.calls[0]![0].data[0]).toMatchObject({ userId: actor.id, type: "CHANGES_REQUESTED" });
-    expect(database.tx.message.create.mock.calls[0]![0].data).toMatchObject({ type: "SYSTEM", content: "Changes requested", senderId: client.id, clientMessageId: "changes:draft:251fa28498e3c16a6c9aa0526518734f436b6ac1d94ab613e8f082e359fd9b90:sys" });
+    expect(database.tx.message.createMany.mock.calls[0]![0].data).toMatchObject({ type: "SYSTEM", content: "Changes requested", senderId: client.id, clientMessageId: "changes:draft:251fa28498e3c16a6c9aa0526518734f436b6ac1d94ab613e8f082e359fd9b90:sys" });
     expect(database.tx.$executeRaw).toHaveBeenCalledTimes(1);
     expect(database.emit).toHaveBeenCalledWith("message:new", expect.objectContaining({ type: "SYSTEM", content: "Changes requested" }));
   });

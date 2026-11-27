@@ -50,4 +50,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("chat SYSTEM message guards", ()
     const replyToId = await systemId("guard-funded:sys");
     await expect(saveConversationMessage(prisma, developer, { conversationId, issueId: issue.id, type: "TEXT", content: "thanks", replyToId })).rejects.toThrow();
   });
+
+  it("rejects a second message sharing a conversation and clientMessageId", async () => {
+    const key = "unique:funds:sys";
+    await prisma.$transaction((tx) => postSystemMessage(tx, issue, client.id, "Funds released", key));
+    await expect(Promise.resolve(prisma.message.create({ data: { conversationId, issueId: issue.id, senderId: client.id, content: "duplicate", type: "SYSTEM", clientMessageId: key } }))).rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("posts only one SYSTEM message when two escrow events race", async () => {
+    const key = "race:funds:sys";
+    const results = await Promise.allSettled([0, 1].map(() => prisma.$transaction((tx) => postSystemMessage(tx, issue, client.id, "Funds released", key))));
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(await prisma.message.count({ where: { conversationId, clientMessageId: key } })).toBe(1);
+  });
+
+  it("keeps the transaction usable when another SYSTEM message already claimed the id", async () => {
+    const key = "conflict:funds:sys";
+    await prisma.message.create({ data: { conversationId, issueId: issue.id, senderId: client.id, content: "Funds released", type: "SYSTEM", clientMessageId: key } });
+    const result = await prisma.$transaction(async (tx) => {
+      const posted = await postSystemMessage(tx, issue, client.id, "Funds released", key);
+      await tx.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: new Date() } });
+      return posted;
+    });
+    expect(result).toBeNull();
+    expect(await prisma.message.count({ where: { conversationId, clientMessageId: key, type: "SYSTEM" } })).toBe(1);
+  });
 });
